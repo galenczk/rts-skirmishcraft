@@ -1,0 +1,122 @@
+[gd_scene format=3 uid="uid://bc8yrmatefpgf"]
+
+[ext_resource type="Script" uid="uid://bf3lopq3l11ig" path="res://SkirmishSandbox.cs" id="1_script"]
+
+[sub_resource type="Environment" id="Environment_graybox"]
+background_mode = 1
+background_color = Color(0.42, 0.5, 0.6, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.48, 0.5, 0.54, 1)
+ambient_light_energy = 0.6
+
+[sub_resource type="StandardMaterial3D" id="Material_ground"]
+albedo_color = Color(0.31, 0.36, 0.3, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_ground"]
+material = SubResource("Material_ground")
+size = Vector3(40, 0.2, 30)
+
+[sub_resource type="StandardMaterial3D" id="Material_friendly"]
+albedo_color = Color(0.12, 0.42, 0.9, 1)
+roughness = 0.8
+
+[sub_resource type="CapsuleMesh" id="Mesh_friendly"]
+material = SubResource("Material_friendly")
+radius = 0.45
+height = 1.6
+
+[sub_resource type="StandardMaterial3D" id="Material_enemy"]
+albedo_color = Color(0.88, 0.16, 0.12, 1)
+roughness = 0.8
+
+[sub_resource type="BoxMesh" id="Mesh_enemy"]
+material = SubResource("Material_enemy")
+size = Vector3(0.9, 1.4, 0.9)
+
+[node name="SkirmishSandbox" type="Node3D" unique_id=295832280]
+script = ExtResource("1_script")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1568734586]
+environment = SubResource("Environment_graybox")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=257037358]
+transform = Transform3D(0.8660254, 0.40957603, -0.28678823, 0, 0.57357645, 0.81915206, 0.5, -0.7094065, 0.49673176, 0, 0, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=1465796435]
+transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 2.9193153, 16.39775, 22.605644)
+current = true
+fov = 55.0
+
+[node name="Ground" type="MeshInstance3D" parent="." unique_id=229770619]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+mesh = SubResource("Mesh_ground")
+
+[node name="FriendlyUnits" type="Node3D" parent="." unique_id=351874758]
+
+[node name="Friendly01" type="MeshInstance3D" parent="FriendlyUnits" unique_id=63501495]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 4)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly02" type="MeshInstance3D" parent="FriendlyUnits" unique_id=649588906]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 4)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly03" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1494266963]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 4)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly04" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1988767053]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 4)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly05" type="MeshInstance3D" parent="FriendlyUnits" unique_id=874307044]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 7)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly06" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1068725150]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 7)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly07" type="MeshInstance3D" parent="FriendlyUnits" unique_id=562047937]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 7)
+mesh = SubResource("Mesh_friendly")
+
+[node name="Friendly08" type="MeshInstance3D" parent="FriendlyUnits" unique_id=510011447]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 7)
+mesh = SubResource("Mesh_friendly")
+
+[node name="EnemyUnits" type="Node3D" parent="." unique_id=104652736]
+
+[node name="Enemy01" type="MeshInstance3D" parent="EnemyUnits" unique_id=712250555]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.7, -4)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy02" type="MeshInstance3D" parent="EnemyUnits" unique_id=678692977]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.7, -4)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy03" type="MeshInstance3D" parent="EnemyUnits" unique_id=32059424]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.7, -4)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy04" type="MeshInstance3D" parent="EnemyUnits" unique_id=94300856]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.7, -4)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy05" type="MeshInstance3D" parent="EnemyUnits" unique_id=624727701]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.7, -7)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy06" type="MeshInstance3D" parent="EnemyUnits" unique_id=956695905]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.7, -7)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy07" type="MeshInstance3D" parent="EnemyUnits" unique_id=1257034792]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.7, -7)
+mesh = SubResource("Mesh_enemy")
+
+[node name="Enemy08" type="MeshInstance3D" parent="EnemyUnits" unique_id=1246269021]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.7, -7)
+mesh = SubResource("Mesh_enemy")
