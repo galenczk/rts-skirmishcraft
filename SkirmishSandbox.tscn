@@ -2,6 +2,15 @@
 
 [ext_resource type="Script" uid="uid://bf3lopq3l11ig" path="res://SkirmishSandbox.cs" id="1_script"]
 [ext_resource type="Script" uid="uid://quujdts64dhq" path="res://RtsCameraController.cs" id="2_camera"]
+[ext_resource type="Script" uid="uid://dxro07ijqa7fx" path="res://SelectableUnit.cs" id="3_selectable"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
+bg_color = Color(0.12, 0.45, 1, 0.18)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.35, 0.7, 1, 0.9)
 
 [sub_resource type="Environment" id="Environment_graybox"]
 background_mode = 1
@@ -59,6 +68,16 @@ transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.70710
 current = true
 fov = 55.0
 
+[node name="SelectionOverlay" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="SelectionRectangle" type="Panel" parent="SelectionOverlay"]
+visible = false
+offset_right = 1.0
+offset_bottom = 1.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBox_selection_rectangle")
+
 [node name="Ground" type="MeshInstance3D" parent="." unique_id=229770619]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
 mesh = SubResource("Mesh_ground")
@@ -68,34 +87,42 @@ mesh = SubResource("Mesh_ground")
 [node name="Friendly01" type="MeshInstance3D" parent="FriendlyUnits" unique_id=63501495]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly02" type="MeshInstance3D" parent="FriendlyUnits" unique_id=649588906]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly03" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1494266963]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly04" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1988767053]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly05" type="MeshInstance3D" parent="FriendlyUnits" unique_id=874307044]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly06" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1068725150]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly07" type="MeshInstance3D" parent="FriendlyUnits" unique_id=562047937]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="Friendly08" type="MeshInstance3D" parent="FriendlyUnits" unique_id=510011447]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
+script = ExtResource("3_selectable")
 
 [node name="EnemyUnits" type="Node3D" parent="." unique_id=104652736]
 
