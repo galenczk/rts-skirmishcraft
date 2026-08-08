@@ -4,8 +4,15 @@ using System.Collections.Generic;
 public partial class SkirmishSandbox : Node3D
 {
     private static readonly StringName SelectUnitsAction = "select_units";
+    private static readonly StringName MoveUnitsAction = "move_units";
+    private static readonly StringName MovementGroundGroup = "movement_ground";
     private const float DragThresholdPixels = 6.0f;
     private const float ClickBoundsPaddingPixels = 4.0f;
+    private const float GroundRayLength = 1000.0f;
+    private const uint GroundCollisionMask = 1u;
+
+    [Export]
+    public float MoveSlotSpacing { get; set; } = 1.5f;
 
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
@@ -24,7 +31,12 @@ public partial class SkirmishSandbox : Node3D
     {
         if (@event is InputEventMouseButton mouseButton)
         {
-            if (mouseButton.IsActionPressed(SelectUnitsAction))
+            if (mouseButton.IsActionPressed(MoveUnitsAction))
+            {
+                TryIssueMoveOrder(mouseButton.Position);
+                GetViewport().SetInputAsHandled();
+            }
+            else if (mouseButton.IsActionPressed(SelectUnitsAction))
             {
                 BeginSelectionDrag(mouseButton.Position);
                 GetViewport().SetInputAsHandled();
@@ -145,6 +157,73 @@ public partial class SkirmishSandbox : Node3D
                 yield return unit;
             }
         }
+    }
+
+    private void TryIssueMoveOrder(Vector2 screenPosition)
+    {
+        if (_selectedUnits.Count == 0)
+        {
+            return;
+        }
+
+        Vector3 rayOrigin = _camera.ProjectRayOrigin(screenPosition);
+        Vector3 rayEnd = rayOrigin +
+            _camera.ProjectRayNormal(screenPosition) * GroundRayLength;
+        PhysicsRayQueryParameters3D query = PhysicsRayQueryParameters3D.Create(
+            rayOrigin,
+            rayEnd,
+            GroundCollisionMask);
+        Godot.Collections.Dictionary hit = GetWorld3D().DirectSpaceState.IntersectRay(query);
+
+        if (hit.Count == 0 ||
+            hit["collider"].AsGodotObject() is not Node collider ||
+            !collider.IsInGroup(MovementGroundGroup))
+        {
+            return;
+        }
+
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        {
+            return;
+        }
+
+        Vector3 commandDestination = hit["position"].AsVector3();
+        float spacing = Mathf.Max(MoveSlotSpacing, 0.1f);
+
+        for (int unitIndex = 0; unitIndex < _selectedUnits.Count; unitIndex++)
+        {
+            SelectableUnit unit = _selectedUnits[unitIndex];
+            if (!IsInstanceValid(unit))
+            {
+                continue;
+            }
+
+            Vector3 requestedDestination = commandDestination +
+                GetMoveSlotOffset(unitIndex, _selectedUnits.Count, spacing);
+            Vector3 navigationDestination = NavigationServer3D.MapGetClosestPoint(
+                navigationMap,
+                requestedDestination);
+            unit.SetMoveTarget(navigationDestination);
+        }
+    }
+
+    private static Vector3 GetMoveSlotOffset(int index, int count, float spacing)
+    {
+        if (count <= 1)
+        {
+            return Vector3.Zero;
+        }
+
+        int columns = Mathf.CeilToInt(Mathf.Sqrt(count));
+        int rows = Mathf.CeilToInt((float)count / columns);
+        int row = index / columns;
+        int column = index % columns;
+        int unitsInRow = Mathf.Min(columns, count - row * columns);
+
+        float xOffset = column * spacing - (unitsInRow - 1) * spacing * 0.5f;
+        float zOffset = row * spacing - (rows - 1) * spacing * 0.5f;
+        return new Vector3(xOffset, 0.0f, zOffset);
     }
 
     private bool TryGetUnitScreenBounds(SelectableUnit unit, out Rect2 bounds)
