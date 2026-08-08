@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://bc8yrmatefpgf"]
 
 [ext_resource type="Script" uid="uid://bf3lopq3l11ig" path="res://SkirmishSandbox.cs" id="1_script"]
+[ext_resource type="Script" uid="uid://quujdts64dhq" path="res://RtsCameraController.cs" id="2_camera"]
 
 [sub_resource type="Environment" id="Environment_graybox"]
 background_mode = 1
@@ -44,8 +45,17 @@ transform = Transform3D(0.8660254, 0.40957603, -0.28678823, 0, 0.57357645, 0.819
 light_energy = 1.2
 shadow_enabled = true
 
-[node name="Camera3D" type="Camera3D" parent="." unique_id=1465796435]
-transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 2.9193153, 16.39775, 22.605644)
+[node name="CameraRig" type="Node3D" parent="."]
+position = Vector3(2.9193153, 0, 6.207894)
+script = ExtResource("2_camera")
+pan_speed = 14.0
+zoom_speed = 2.5
+minimum_zoom_distance = 10.0
+maximum_zoom_distance = 32.0
+pan_limits = Vector2(18, 13)
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig" unique_id=1465796435]
+transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 0, 16.39775, 16.39775)
 current = true
 fov = 55.0
 
