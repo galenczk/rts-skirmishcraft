@@ -1,44 +1,17 @@
 using Godot;
 
-public partial class EnemyEngagement : Node
+public partial class UnitEngagement : Node
 {
     private SelectableUnit _unit = null!;
     private UnitDefinition _definition = null!;
-    private bool _initialized;
-
-    public override void _Ready()
-    {
-        SetPhysicsProcess(_initialized);
-    }
-
-    public override void _PhysicsProcess(double delta)
-    {
-        if (!_unit.IsAlive || _unit.HasOrderedAttackTarget)
-        {
-            return;
-        }
-
-        SelectableUnit target = FindNearestBlueUnitWithinEngagementRange();
-        if (target is not null)
-        {
-            _unit.SetAutonomousAttackTarget(target);
-        }
-    }
 
     public void Initialize(SelectableUnit unit, UnitDefinition definition)
     {
         _unit = unit;
         _definition = definition;
-        _initialized = true;
-        SetPhysicsProcess(true);
     }
 
-    public void Stop()
-    {
-        SetPhysicsProcess(false);
-    }
-
-    private SelectableUnit FindNearestBlueUnitWithinEngagementRange()
+    public SelectableUnit FindNearestEnemyWithinRange()
     {
         SelectableUnit nearestTarget = null!;
         float nearestDistanceSquared = float.MaxValue;
@@ -46,7 +19,7 @@ public partial class EnemyEngagement : Node
         float engagementRangeSquared = engagementRange * engagementRange;
 
         foreach (Node node in GetTree().GetNodesInGroup(
-                     SelectableUnit.GetCombatGroup(SelectableUnit.UnitTeam.Friendly)))
+                     SelectableUnit.GetEnemyCombatGroup(_unit.Team)))
         {
             if (node is not SelectableUnit candidate ||
                 !IsInstanceValid(candidate) ||

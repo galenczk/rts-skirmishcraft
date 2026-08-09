@@ -8,9 +8,19 @@ public partial class SelectableUnit : MeshInstance3D
         Enemy,
     }
 
+    public enum UnitActivity
+    {
+        Idle,
+        Moving,
+        Pursuing,
+        Attacking,
+        Dead,
+    }
+
     public static readonly StringName FriendlySelectionGroup = "friendly_selectable_units";
     private static readonly StringName FriendlyCombatGroup = "combat_units_friendly";
     private static readonly StringName EnemyCombatGroup = "combat_units_enemy";
+    private const float AttackApproachMargin = 0.2f;
 
     [Export]
     public UnitTeam Team { get; set; } = UnitTeam.Friendly;
@@ -20,14 +30,15 @@ public partial class SelectableUnit : MeshInstance3D
 
     private UnitMovement _movement = null!;
     private UnitCombat _combat = null!;
-    private EnemyEngagement _enemyEngagement = null!;
+    private UnitEngagement _engagement = null!;
     private UnitPresentation _presentation = null!;
-    private bool _isDead;
+    private SelectableUnit _combatTarget = null!;
     private bool _isGameplayStopped;
 
     public float Health { get; private set; }
-    public bool IsAlive => !_isDead;
+    public bool IsAlive => Activity != UnitActivity.Dead;
     public bool IsSelected { get; private set; }
+    public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
 
     public override void _Ready()
     {
@@ -57,17 +68,37 @@ public partial class SelectableUnit : MeshInstance3D
         AddChild(_combat);
         _combat.Initialize(this, Definition);
 
-        if (Team == UnitTeam.Enemy)
+        _engagement = new UnitEngagement { Name = "Engagement" };
+        AddChild(_engagement);
+        _engagement.Initialize(this, Definition);
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (_isGameplayStopped || Activity == UnitActivity.Dead)
         {
-            _enemyEngagement = new EnemyEngagement { Name = "EnemyEngagement" };
-            AddChild(_enemyEngagement);
-            _enemyEngagement.Initialize(this, Definition);
+            return;
+        }
+
+        _combat.AdvanceCooldown(delta);
+
+        switch (Activity)
+        {
+            case UnitActivity.Idle:
+                TryBeginIdleEngagement();
+                break;
+            case UnitActivity.Pursuing:
+                UpdatePursuit();
+                break;
+            case UnitActivity.Attacking:
+                UpdateAttack();
+                break;
         }
     }
 
     public void SetSelected(bool selected)
     {
-        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
+        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
         {
             return;
         }
@@ -78,53 +109,35 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetMoveTarget(Vector3 worldTarget)
     {
-        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
+        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
         {
             return;
         }
 
-        _combat.ClearOrderedTarget();
-        _movement.SetMoveTarget(worldTarget);
+        ClearCombatTarget();
+        Activity = UnitActivity.Moving;
+        _movement.SetMoveTarget(worldTarget, Definition.StoppingDistance);
     }
 
     public void SetAttackTarget(SelectableUnit target)
     {
-        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
+        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
         {
             return;
         }
 
-        AssignAttackTarget(target);
-    }
-
-    internal bool HasOrderedAttackTarget => _combat.HasOrderedTarget;
-
-    internal void SetAutonomousAttackTarget(SelectableUnit target)
-    {
-        if (Team != UnitTeam.Enemy || _isDead || _isGameplayStopped)
-        {
-            return;
-        }
-
-        AssignAttackTarget(target);
-    }
-
-    private void AssignAttackTarget(SelectableUnit target)
-    {
-        if (!IsInstanceValid(target) ||
-            !target.IsAlive ||
-            target.Team == Team)
+        if (!IsValidCombatTarget(target))
         {
             return;
         }
 
         _movement.CancelMoveOrder();
-        _combat.SetOrderedTarget(target);
+        BeginEngagement(target);
     }
 
     public void TakeDamage(float damage)
     {
-        if (_isDead || _isGameplayStopped || damage <= 0.0f)
+        if (!IsAlive || _isGameplayStopped || damage <= 0.0f)
         {
             return;
         }
@@ -148,25 +161,28 @@ public partial class SelectableUnit : MeshInstance3D
         return team == UnitTeam.Friendly ? EnemyCombatGroup : FriendlyCombatGroup;
     }
 
-    internal void SetCombatPursuitDestination(Vector3 worldTarget)
+    internal void NotifyMovementCompleted()
     {
-        if (!_isDead && !_isGameplayStopped)
+        if (!IsAlive || _isGameplayStopped)
         {
-            _movement.SetMoveTarget(worldTarget);
+            return;
         }
-    }
 
-    internal void CancelCombatPursuit()
-    {
-        if (!_isDead && !_isGameplayStopped)
+        if (Activity == UnitActivity.Moving)
         {
-            _movement.CancelMoveOrder();
+            Activity = UnitActivity.Idle;
+        }
+        else if (Activity == UnitActivity.Pursuing &&
+                 IsValidCombatTarget(_combatTarget) &&
+                 IsInsideAttackPosition(_combatTarget))
+        {
+            Activity = UnitActivity.Attacking;
         }
     }
 
     public void StopGameplay()
     {
-        if (_isDead || _isGameplayStopped)
+        if (!IsAlive || _isGameplayStopped)
         {
             return;
         }
@@ -174,25 +190,119 @@ public partial class SelectableUnit : MeshInstance3D
         _isGameplayStopped = true;
         IsSelected = false;
         _presentation.SetSelected(false);
+        ClearCombatTarget();
         _combat.Stop();
         _movement.Stop();
-        if (Team == UnitTeam.Enemy)
+        SetPhysicsProcess(false);
+    }
+
+    private void TryBeginIdleEngagement()
+    {
+        SelectableUnit target = _engagement.FindNearestEnemyWithinRange();
+        if (target is not null)
         {
-            _enemyEngagement.Stop();
+            BeginEngagement(target);
         }
+    }
+
+    private void BeginEngagement(SelectableUnit target)
+    {
+        _combatTarget = target;
+        if (IsInsideAttackPosition(target))
+        {
+            _movement.CancelMoveOrder();
+            Activity = UnitActivity.Attacking;
+        }
+        else
+        {
+            BeginPursuit();
+        }
+    }
+
+    private void UpdatePursuit()
+    {
+        if (!IsValidCombatTarget(_combatTarget))
+        {
+            _movement.CancelMoveOrder();
+            ClearCombatTarget();
+            Activity = UnitActivity.Idle;
+            return;
+        }
+
+        if (IsInsideAttackPosition(_combatTarget))
+        {
+            _movement.CancelMoveOrder();
+            Activity = UnitActivity.Attacking;
+            return;
+        }
+
+        _movement.SetMoveTarget(
+            _combatTarget.GlobalPosition,
+            GetPursuitStoppingDistance());
+    }
+
+    private void UpdateAttack()
+    {
+        if (!IsValidCombatTarget(_combatTarget))
+        {
+            ClearCombatTarget();
+            Activity = UnitActivity.Idle;
+            return;
+        }
+
+        if (!_combat.IsTargetInRange(_combatTarget))
+        {
+            BeginPursuit();
+            return;
+        }
+
+        if (!_movement.IsMoving)
+        {
+            _combat.TryAttack(_combatTarget);
+        }
+    }
+
+    private void BeginPursuit()
+    {
+        Activity = UnitActivity.Pursuing;
+        _movement.SetMoveTarget(
+            _combatTarget.GlobalPosition,
+            GetPursuitStoppingDistance());
+    }
+
+    private bool IsInsideAttackPosition(SelectableUnit target)
+    {
+        float stoppingDistance = GetPursuitStoppingDistance();
+        return GlobalPosition.DistanceSquaredTo(target.GlobalPosition) <=
+            stoppingDistance * stoppingDistance;
+    }
+
+    private float GetPursuitStoppingDistance()
+    {
+        return Mathf.Max(Definition.AttackRange - AttackApproachMargin, 0.0f);
+    }
+
+    private bool IsValidCombatTarget(SelectableUnit target)
+    {
+        return target is not null &&
+            IsInstanceValid(target) &&
+            target.IsAlive &&
+            target.Team != Team;
+    }
+
+    private void ClearCombatTarget()
+    {
+        _combatTarget = null!;
     }
 
     private void Die()
     {
-        _isDead = true;
+        Activity = UnitActivity.Dead;
         IsSelected = false;
+        ClearCombatTarget();
         _combat.Stop();
         _movement.Stop();
-        if (Team == UnitTeam.Enemy)
-        {
-            _enemyEngagement.Stop();
-        }
-
+        SetPhysicsProcess(false);
         _presentation.HideUnit();
         RemoveFromGroup(FriendlySelectionGroup);
         RemoveFromGroup(GetCombatGroup(Team));
