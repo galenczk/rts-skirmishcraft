@@ -23,6 +23,7 @@ public partial class SelectableUnit : MeshInstance3D
     private EnemyEngagement _enemyEngagement = null!;
     private UnitPresentation _presentation = null!;
     private bool _isDead;
+    private bool _isGameplayStopped;
 
     public float Health { get; private set; }
     public bool IsAlive => !_isDead;
@@ -66,7 +67,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetSelected(bool selected)
     {
-        if (Team != UnitTeam.Friendly || _isDead)
+        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
         {
             return;
         }
@@ -77,7 +78,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetMoveTarget(Vector3 worldTarget)
     {
-        if (Team != UnitTeam.Friendly || _isDead)
+        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
         {
             return;
         }
@@ -88,7 +89,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetAttackTarget(SelectableUnit target)
     {
-        if (Team != UnitTeam.Friendly || _isDead)
+        if (Team != UnitTeam.Friendly || _isDead || _isGameplayStopped)
         {
             return;
         }
@@ -100,7 +101,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     internal void SetAutonomousAttackTarget(SelectableUnit target)
     {
-        if (Team != UnitTeam.Enemy || _isDead)
+        if (Team != UnitTeam.Enemy || _isDead || _isGameplayStopped)
         {
             return;
         }
@@ -123,7 +124,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void TakeDamage(float damage)
     {
-        if (_isDead || damage <= 0.0f)
+        if (_isDead || _isGameplayStopped || damage <= 0.0f)
         {
             return;
         }
@@ -149,7 +150,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     internal void SetCombatPursuitDestination(Vector3 worldTarget)
     {
-        if (!_isDead)
+        if (!_isDead && !_isGameplayStopped)
         {
             _movement.SetMoveTarget(worldTarget);
         }
@@ -157,9 +158,27 @@ public partial class SelectableUnit : MeshInstance3D
 
     internal void CancelCombatPursuit()
     {
-        if (!_isDead)
+        if (!_isDead && !_isGameplayStopped)
         {
             _movement.CancelMoveOrder();
+        }
+    }
+
+    public void StopGameplay()
+    {
+        if (_isDead || _isGameplayStopped)
+        {
+            return;
+        }
+
+        _isGameplayStopped = true;
+        IsSelected = false;
+        _presentation.SetSelected(false);
+        _combat.Stop();
+        _movement.Stop();
+        if (Team == UnitTeam.Enemy)
+        {
+            _enemyEngagement.Stop();
         }
     }
 

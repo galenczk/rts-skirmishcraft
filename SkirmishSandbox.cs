@@ -10,6 +10,7 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName Load100UnitScenarioAction = "debug_units_100";
     private static readonly StringName Load250UnitScenarioAction = "debug_units_250";
     private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
+    private static readonly StringName RestartMatchAction = "restart_match";
     private static readonly StringName MovementGroundGroup = "movement_ground";
     private const float DragThresholdPixels = 6.0f;
     private const float ClickBoundsPaddingPixels = 4.0f;
@@ -40,10 +41,15 @@ public partial class SkirmishSandbox : Node3D
     private Vector2 _playableBattlefieldSize;
     private Control _selectionRectangle = null!;
     private Label _debugMetrics = null!;
+    private CanvasLayer _matchOutcomeOverlay = null!;
+    private Label _matchOutcomeLabel = null!;
     private Vector2 _dragStart;
     private Vector2 _dragCurrent;
     private double _debugOverlayUpdateTime;
     private bool _isDragging;
+    private bool _isReplacingScenario;
+    private bool _isMatchTrackingActive;
+    private bool _isMatchEnded;
 
     public override void _Ready()
     {
@@ -61,11 +67,18 @@ public partial class SkirmishSandbox : Node3D
         ConfigureCameraBounds();
         _selectionRectangle = GetNode<Control>("SelectionOverlay/SelectionRectangle");
         _debugMetrics = GetNode<Label>("DebugOverlay/MetricsPanel/MetricsLabel");
+        _matchOutcomeOverlay = GetNode<CanvasLayer>("MatchOutcomeOverlay");
+        _matchOutcomeLabel = GetNode<Label>(
+            "MatchOutcomeOverlay/CenterContainer/OutcomePanel/OutcomeText");
+        _matchOutcomeOverlay.Visible = false;
+        _isMatchTrackingActive = true;
         UpdateDebugOverlay();
     }
 
     public override void _Process(double delta)
     {
+        EvaluateMatchOutcome();
+
         _debugOverlayUpdateTime += delta;
         if (_debugOverlayUpdateTime < DebugOverlayUpdateInterval)
         {
@@ -78,6 +91,17 @@ public partial class SkirmishSandbox : Node3D
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (_isMatchEnded)
+        {
+            if (@event.IsActionPressed(RestartMatchAction))
+            {
+                CallDeferred(MethodName.RestartCurrentScene);
+                GetViewport().SetInputAsHandled();
+            }
+
+            return;
+        }
+
         if (TryLoadDebugScenario(@event))
         {
             GetViewport().SetInputAsHandled();
@@ -142,6 +166,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void RespawnFriendlyUnits(int count, bool useDefaultLayout = false)
     {
+        BeginScenarioReplacement();
         ClearSelection();
 
         foreach (Node child in _friendlyUnits.GetChildren())
@@ -177,7 +202,24 @@ public partial class SkirmishSandbox : Node3D
             RespawnEnemies(useDefaultLayout: false);
         }
 
+        EndScenarioReplacement();
         UpdateDebugOverlay();
+    }
+
+    private void BeginScenarioReplacement()
+    {
+        _isReplacingScenario = true;
+        _isMatchTrackingActive = false;
+        _isMatchEnded = false;
+        _matchOutcomeOverlay.Visible = false;
+        _isDragging = false;
+        _selectionRectangle.Visible = false;
+    }
+
+    private void EndScenarioReplacement()
+    {
+        _isReplacingScenario = false;
+        _isMatchTrackingActive = true;
     }
 
     private void RespawnEnemies(bool useDefaultLayout)
@@ -288,6 +330,72 @@ public partial class SkirmishSandbox : Node3D
             $"Enemy: {_enemyUnits.GetChildCount()}\n" +
             $"Selected: {_selectedUnits.Count}\n\n" +
             "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500";
+    }
+
+    private void EvaluateMatchOutcome()
+    {
+        if (!_isMatchTrackingActive || _isReplacingScenario || _isMatchEnded)
+        {
+            return;
+        }
+
+        int livingFriendlyCount = CountLivingUnits(SelectableUnit.UnitTeam.Friendly);
+        int livingEnemyCount = CountLivingUnits(SelectableUnit.UnitTeam.Enemy);
+        if (livingFriendlyCount > 0 && livingEnemyCount > 0)
+        {
+            return;
+        }
+
+        if (livingFriendlyCount == 0 && livingEnemyCount == 0)
+        {
+            EndMatch("Draw");
+        }
+        else if (livingEnemyCount == 0)
+        {
+            EndMatch("Victory");
+        }
+        else
+        {
+            EndMatch("Defeat");
+        }
+    }
+
+    private int CountLivingUnits(SelectableUnit.UnitTeam team)
+    {
+        int count = 0;
+        foreach (SelectableUnit unit in GetUnitsInGroup(SelectableUnit.GetCombatGroup(team)))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private void EndMatch(string outcome)
+    {
+        _isMatchEnded = true;
+        _isMatchTrackingActive = false;
+        ClearSelection();
+        _isDragging = false;
+        _selectionRectangle.Visible = false;
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
+        {
+            unit.StopGameplay();
+        }
+
+        _matchOutcomeLabel.Text = outcome;
+        _matchOutcomeOverlay.Visible = true;
+        UpdateDebugOverlay();
+    }
+
+    private void RestartCurrentScene()
+    {
+        Error reloadError = GetTree().ReloadCurrentScene();
+        if (reloadError != Error.Ok)
+        {
+            GD.PushError($"Unable to restart the skirmish scene: {reloadError}");
+        }
     }
 
     private void BeginSelectionDrag(Vector2 position)
