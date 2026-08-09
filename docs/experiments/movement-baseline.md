@@ -19,7 +19,9 @@ Do not treat results from one machine as generally representative. Record the Go
 - `F4`: respawn 250 friendly units.
 - `F5`: respawn 500 friendly units.
 
-Changing the friendly-unit preset clears selection and removes any active friendly movement orders. The eight red enemy placeholders remain stationary and unchanged.
+Changing the friendly-unit preset clears selection and removes any active friendly movement orders. The eight red enemy placeholders remain stationary.
+
+After Phase 6, red and blue units can damage one another when they are within attack range. For a movement-only baseline, issue commands away from the red group and record the run before combat changes either unit count. Combat-enabled runs should be labeled separately rather than compared directly with pre-combat movement baselines.
 
 ## Runtime metrics
 

@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://bf3lopq3l11ig" path="res://SkirmishSandbox.cs" id="1_script"]
 [ext_resource type="Script" uid="uid://quujdts64dhq" path="res://RtsCameraController.cs" id="2_camera"]
 [ext_resource type="Script" uid="uid://dxro07ijqa7fx" path="res://SelectableUnit.cs" id="3_selectable"]
+[ext_resource type="Resource" path="res://PlaceholderUnitDefinition.tres" id="4_unit_definition"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
 bg_color = Color(0.12, 0.45, 1, 0.18)
@@ -134,72 +135,104 @@ navigation_mesh = SubResource("NavigationMesh_battlefield")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly02" type="MeshInstance3D" parent="FriendlyUnits" unique_id=649588906]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly03" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1494266963]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly04" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1988767053]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 4)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly05" type="MeshInstance3D" parent="FriendlyUnits" unique_id=874307044]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly06" type="MeshInstance3D" parent="FriendlyUnits" unique_id=1068725150]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly07" type="MeshInstance3D" parent="FriendlyUnits" unique_id=562047937]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="Friendly08" type="MeshInstance3D" parent="FriendlyUnits" unique_id=510011447]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.8, 7)
 mesh = SubResource("Mesh_friendly")
 script = ExtResource("3_selectable")
+Definition = ExtResource("4_unit_definition")
 
 [node name="EnemyUnits" type="Node3D" parent="." unique_id=104652736]
 
 [node name="Enemy01" type="MeshInstance3D" parent="EnemyUnits" unique_id=712250555]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.7, -4)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy02" type="MeshInstance3D" parent="EnemyUnits" unique_id=678692977]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.7, -4)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy03" type="MeshInstance3D" parent="EnemyUnits" unique_id=32059424]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.7, -4)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy04" type="MeshInstance3D" parent="EnemyUnits" unique_id=94300856]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.7, -4)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy05" type="MeshInstance3D" parent="EnemyUnits" unique_id=624727701]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.7, -7)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy06" type="MeshInstance3D" parent="EnemyUnits" unique_id=956695905]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0.7, -7)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy07" type="MeshInstance3D" parent="EnemyUnits" unique_id=1257034792]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0.7, -7)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")
 
 [node name="Enemy08" type="MeshInstance3D" parent="EnemyUnits" unique_id=1246269021]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.7, -7)
 mesh = SubResource("Mesh_enemy")
+script = ExtResource("3_selectable")
+Team = 1
+Definition = ExtResource("4_unit_definition")

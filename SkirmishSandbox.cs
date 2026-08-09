@@ -28,7 +28,11 @@ public partial class SkirmishSandbox : Node3D
     private Node3D _friendlyUnits = null!;
     private Node3D _enemyUnits = null!;
     private Mesh _friendlyUnitMesh = null!;
+    private Mesh _enemyUnitMesh = null!;
+    private UnitDefinition _friendlyUnitDefinition = null!;
+    private UnitDefinition _enemyUnitDefinition = null!;
     private Transform3D[] _defaultFriendlyTransforms = null!;
+    private Transform3D[] _defaultEnemyTransforms = null!;
     private Control _selectionRectangle = null!;
     private Label _debugMetrics = null!;
     private Vector2 _dragStart;
@@ -42,7 +46,12 @@ public partial class SkirmishSandbox : Node3D
         _friendlyUnits = GetNode<Node3D>("FriendlyUnits");
         _enemyUnits = GetNode<Node3D>("EnemyUnits");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
-        _defaultFriendlyTransforms = CaptureFriendlyTransforms();
+        _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
+        _friendlyUnitDefinition = GetNode<SelectableUnit>(
+            "FriendlyUnits/Friendly01").Definition;
+        _enemyUnitDefinition = GetNode<SelectableUnit>("EnemyUnits/Enemy01").Definition;
+        _defaultFriendlyTransforms = CaptureTransforms(_friendlyUnits);
+        _defaultEnemyTransforms = CaptureTransforms(_enemyUnits);
         _selectionRectangle = GetNode<Control>("SelectionOverlay/SelectionRectangle");
         _debugMetrics = GetNode<Label>("DebugOverlay/MetricsPanel/MetricsLabel");
         UpdateDebugOverlay();
@@ -143,20 +152,48 @@ public partial class SkirmishSandbox : Node3D
             {
                 Name = $"Friendly{index + 1:D3}",
                 Mesh = _friendlyUnitMesh,
+                Definition = _friendlyUnitDefinition,
                 Transform = transform,
             };
             _friendlyUnits.AddChild(unit);
         }
 
+        if (useDefaultLayout)
+        {
+            RespawnDefaultEnemies();
+        }
+
         UpdateDebugOverlay();
     }
 
-    private Transform3D[] CaptureFriendlyTransforms()
+    private void RespawnDefaultEnemies()
     {
-        Transform3D[] transforms = new Transform3D[_friendlyUnits.GetChildCount()];
+        foreach (Node child in _enemyUnits.GetChildren())
+        {
+            _enemyUnits.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        for (int index = 0; index < _defaultEnemyTransforms.Length; index++)
+        {
+            SelectableUnit unit = new()
+            {
+                Name = $"Enemy{index + 1:D3}",
+                Mesh = _enemyUnitMesh,
+                Team = SelectableUnit.UnitTeam.Enemy,
+                Definition = _enemyUnitDefinition,
+                Transform = _defaultEnemyTransforms[index],
+            };
+            _enemyUnits.AddChild(unit);
+        }
+    }
+
+    private static Transform3D[] CaptureTransforms(Node3D units)
+    {
+        Transform3D[] transforms = new Transform3D[units.GetChildCount()];
         for (int index = 0; index < transforms.Length; index++)
         {
-            transforms[index] = _friendlyUnits.GetChild<Node3D>(index).Transform;
+            transforms[index] = units.GetChild<Node3D>(index).Transform;
         }
 
         return transforms;
@@ -176,6 +213,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void UpdateDebugOverlay()
     {
+        PruneInvalidSelection();
         _debugMetrics.Text =
             $"FPS: {Engine.GetFramesPerSecond():0}\n" +
             $"Friendly: {_friendlyUnits.GetChildCount()}\n" +
@@ -290,6 +328,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void TryIssueMoveOrder(Vector2 screenPosition)
     {
+        PruneInvalidSelection();
         if (_selectedUnits.Count == 0)
         {
             return;
@@ -405,5 +444,16 @@ public partial class SkirmishSandbox : Node3D
         }
 
         _selectedUnits.Clear();
+    }
+
+    private void PruneInvalidSelection()
+    {
+        for (int index = _selectedUnits.Count - 1; index >= 0; index--)
+        {
+            if (!IsInstanceValid(_selectedUnits[index]))
+            {
+                _selectedUnits.RemoveAt(index);
+            }
+        }
     }
 }

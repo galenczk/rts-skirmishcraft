@@ -2,114 +2,119 @@ using Godot;
 
 public partial class SelectableUnit : MeshInstance3D
 {
+    public enum UnitTeam
+    {
+        Friendly,
+        Enemy,
+    }
+
     public static readonly StringName FriendlySelectionGroup = "friendly_selectable_units";
+    private static readonly StringName FriendlyCombatGroup = "combat_units_friendly";
+    private static readonly StringName EnemyCombatGroup = "combat_units_enemy";
 
     [Export]
-    public float MovementSpeed { get; set; } = 4.0f;
+    public UnitTeam Team { get; set; } = UnitTeam.Friendly;
 
     [Export]
-    public float StoppingDistance { get; set; } = 0.3f;
+    public UnitDefinition Definition { get; set; } = null!;
 
-    private MeshInstance3D _selectionMarker = null!;
-    private NavigationAgent3D _navigationAgent = null!;
-    private Vector3 _moveTarget;
-    private bool _hasMoveOrder;
+    private UnitMovement _movement = null!;
+    private UnitCombat _combat = null!;
+    private UnitPresentation _presentation = null!;
+    private bool _isDead;
 
+    public float Health { get; private set; }
+    public bool IsAlive => !_isDead;
     public bool IsSelected { get; private set; }
 
     public override void _Ready()
     {
-        AddToGroup(FriendlySelectionGroup);
-        _navigationAgent = CreateNavigationAgent();
-        AddChild(_navigationAgent);
-        _selectionMarker = CreateSelectionMarker();
-        AddChild(_selectionMarker);
-    }
-
-    public override void _PhysicsProcess(double delta)
-    {
-        if (!_hasMoveOrder)
+        if (Definition is null)
         {
-            return;
+            GD.PushWarning($"{Name} has no UnitDefinition; using temporary defaults.");
+            Definition = new UnitDefinition();
         }
 
-        Vector3 nextPathPosition = _navigationAgent.GetNextPathPosition();
-        if (_navigationAgent.IsNavigationFinished())
+        Health = Mathf.Max(Definition.MaxHealth, 1.0f);
+        AddToGroup(GetCombatGroup(Team));
+
+        _presentation = new UnitPresentation { Name = "Presentation" };
+        AddChild(_presentation);
+        _presentation.Initialize(this, Team == UnitTeam.Friendly);
+
+        if (Team == UnitTeam.Friendly)
         {
-            _hasMoveOrder = false;
-            return;
+            AddToGroup(FriendlySelectionGroup);
+            _movement = new UnitMovement { Name = "Movement" };
+            AddChild(_movement);
+            _movement.Initialize(this, Definition);
         }
 
-        Vector3 horizontalPathPosition = new(
-            nextPathPosition.X,
-            GlobalPosition.Y,
-            nextPathPosition.Z);
-        float movementStep = Mathf.Max(MovementSpeed, 0.0f) * (float)delta;
-        GlobalPosition = GlobalPosition.MoveToward(horizontalPathPosition, movementStep);
-
-        Vector2 remainingDistance = new(
-            GlobalPosition.X - _moveTarget.X,
-            GlobalPosition.Z - _moveTarget.Z);
-        float stoppingDistance = Mathf.Max(StoppingDistance, 0.05f);
-        if (remainingDistance.LengthSquared() <= stoppingDistance * stoppingDistance)
-        {
-            _hasMoveOrder = false;
-        }
+        _combat = new UnitCombat { Name = "Combat" };
+        AddChild(_combat);
+        _combat.Initialize(this, Definition);
     }
 
     public void SetSelected(bool selected)
     {
+        if (Team != UnitTeam.Friendly || _isDead)
+        {
+            return;
+        }
+
         IsSelected = selected;
-        _selectionMarker.Visible = selected;
+        _presentation.SetSelected(selected);
     }
 
     public void SetMoveTarget(Vector3 worldTarget)
     {
-        _moveTarget = worldTarget;
-        _navigationAgent.TargetDesiredDistance = Mathf.Max(StoppingDistance, 0.05f);
-        _navigationAgent.MaxSpeed = Mathf.Max(MovementSpeed, 0.0f);
-        _navigationAgent.TargetPosition = worldTarget;
-        _hasMoveOrder = true;
+        if (Team != UnitTeam.Friendly || _isDead)
+        {
+            return;
+        }
+
+        _movement.SetMoveTarget(worldTarget);
     }
 
-    private NavigationAgent3D CreateNavigationAgent()
+    public void TakeDamage(float damage)
     {
-        return new NavigationAgent3D
+        if (_isDead || damage <= 0.0f)
         {
-            Name = "NavigationAgent3D",
-            PathDesiredDistance = 0.2f,
-            PathHeightOffset = -0.8f,
-            TargetDesiredDistance = Mathf.Max(StoppingDistance, 0.05f),
-            Radius = 0.45f,
-            Height = 1.6f,
-            MaxSpeed = Mathf.Max(MovementSpeed, 0.0f),
-            AvoidanceEnabled = false,
-        };
+            return;
+        }
+
+        Health = Mathf.Max(Health - damage, 0.0f);
+        _presentation.ShowDamageFlash();
+
+        if (Health <= 0.0f)
+        {
+            Die();
+        }
     }
 
-    private static MeshInstance3D CreateSelectionMarker()
+    internal static StringName GetCombatGroup(UnitTeam team)
     {
-        StandardMaterial3D markerMaterial = new()
-        {
-            AlbedoColor = new Color(1.0f, 0.82f, 0.08f, 1.0f),
-            Roughness = 1.0f,
-        };
+        return team == UnitTeam.Friendly ? FriendlyCombatGroup : EnemyCombatGroup;
+    }
 
-        CylinderMesh markerMesh = new()
-        {
-            TopRadius = 0.68f,
-            BottomRadius = 0.68f,
-            Height = 0.04f,
-            RadialSegments = 24,
-            Material = markerMaterial,
-        };
+    internal static StringName GetEnemyCombatGroup(UnitTeam team)
+    {
+        return team == UnitTeam.Friendly ? EnemyCombatGroup : FriendlyCombatGroup;
+    }
 
-        return new MeshInstance3D
+    private void Die()
+    {
+        _isDead = true;
+        IsSelected = false;
+        _combat.Stop();
+        if (Team == UnitTeam.Friendly)
         {
-            Name = "SelectionMarker",
-            Position = new Vector3(0.0f, -0.76f, 0.0f),
-            Mesh = markerMesh,
-            Visible = false,
-        };
+            _movement.Stop();
+        }
+
+        _presentation.HideUnit();
+        RemoveFromGroup(FriendlySelectionGroup);
+        RemoveFromGroup(GetCombatGroup(Team));
+        QueueFree();
     }
 }
