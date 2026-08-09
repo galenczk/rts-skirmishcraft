@@ -5,30 +5,69 @@ public partial class SkirmishSandbox : Node3D
 {
     private static readonly StringName SelectUnitsAction = "select_units";
     private static readonly StringName MoveUnitsAction = "move_units";
+    private static readonly StringName LoadDefaultScenarioAction = "debug_units_default";
+    private static readonly StringName Load20UnitScenarioAction = "debug_units_20";
+    private static readonly StringName Load100UnitScenarioAction = "debug_units_100";
+    private static readonly StringName Load250UnitScenarioAction = "debug_units_250";
+    private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
     private static readonly StringName MovementGroundGroup = "movement_ground";
     private const float DragThresholdPixels = 6.0f;
     private const float ClickBoundsPaddingPixels = 4.0f;
     private const float GroundRayLength = 1000.0f;
     private const uint GroundCollisionMask = 1u;
+    private const float DebugOverlayUpdateInterval = 0.25f;
+    private const float TestSpawnSpacing = 1.1f;
+    private const float TestSpawnAspectRatio = 38.0f / 28.0f;
+    private const float FriendlyUnitHeight = 0.8f;
 
     [Export]
     public float MoveSlotSpacing { get; set; } = 1.5f;
 
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
+    private Node3D _friendlyUnits = null!;
+    private Node3D _enemyUnits = null!;
+    private Mesh _friendlyUnitMesh = null!;
+    private Transform3D[] _defaultFriendlyTransforms = null!;
     private Control _selectionRectangle = null!;
+    private Label _debugMetrics = null!;
     private Vector2 _dragStart;
     private Vector2 _dragCurrent;
+    private double _debugOverlayUpdateTime;
     private bool _isDragging;
 
     public override void _Ready()
     {
         _camera = GetNode<Camera3D>("CameraRig/Camera3D");
+        _friendlyUnits = GetNode<Node3D>("FriendlyUnits");
+        _enemyUnits = GetNode<Node3D>("EnemyUnits");
+        _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
+        _defaultFriendlyTransforms = CaptureFriendlyTransforms();
         _selectionRectangle = GetNode<Control>("SelectionOverlay/SelectionRectangle");
+        _debugMetrics = GetNode<Label>("DebugOverlay/MetricsPanel/MetricsLabel");
+        UpdateDebugOverlay();
+    }
+
+    public override void _Process(double delta)
+    {
+        _debugOverlayUpdateTime += delta;
+        if (_debugOverlayUpdateTime < DebugOverlayUpdateInterval)
+        {
+            return;
+        }
+
+        _debugOverlayUpdateTime = 0.0;
+        UpdateDebugOverlay();
     }
 
     public override void _UnhandledInput(InputEvent @event)
     {
+        if (TryLoadDebugScenario(@event))
+        {
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
         if (@event is InputEventMouseButton mouseButton)
         {
             if (mouseButton.IsActionPressed(MoveUnitsAction))
@@ -53,6 +92,96 @@ public partial class SkirmishSandbox : Node3D
             UpdateSelectionRectangle();
             GetViewport().SetInputAsHandled();
         }
+    }
+
+    private bool TryLoadDebugScenario(InputEvent @event)
+    {
+        if (@event.IsActionPressed(LoadDefaultScenarioAction))
+        {
+            RespawnFriendlyUnits(8, useDefaultLayout: true);
+        }
+        else if (@event.IsActionPressed(Load20UnitScenarioAction))
+        {
+            RespawnFriendlyUnits(20);
+        }
+        else if (@event.IsActionPressed(Load100UnitScenarioAction))
+        {
+            RespawnFriendlyUnits(100);
+        }
+        else if (@event.IsActionPressed(Load250UnitScenarioAction))
+        {
+            RespawnFriendlyUnits(250);
+        }
+        else if (@event.IsActionPressed(Load500UnitScenarioAction))
+        {
+            RespawnFriendlyUnits(500);
+        }
+        else
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void RespawnFriendlyUnits(int count, bool useDefaultLayout = false)
+    {
+        ClearSelection();
+
+        foreach (Node child in _friendlyUnits.GetChildren())
+        {
+            _friendlyUnits.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        for (int index = 0; index < count; index++)
+        {
+            Transform3D transform = useDefaultLayout
+                ? _defaultFriendlyTransforms[index]
+                : CreateTestSpawnTransform(index, count);
+            SelectableUnit unit = new()
+            {
+                Name = $"Friendly{index + 1:D3}",
+                Mesh = _friendlyUnitMesh,
+                Transform = transform,
+            };
+            _friendlyUnits.AddChild(unit);
+        }
+
+        UpdateDebugOverlay();
+    }
+
+    private Transform3D[] CaptureFriendlyTransforms()
+    {
+        Transform3D[] transforms = new Transform3D[_friendlyUnits.GetChildCount()];
+        for (int index = 0; index < transforms.Length; index++)
+        {
+            transforms[index] = _friendlyUnits.GetChild<Node3D>(index).Transform;
+        }
+
+        return transforms;
+    }
+
+    private static Transform3D CreateTestSpawnTransform(int index, int count)
+    {
+        int columns = Mathf.CeilToInt(Mathf.Sqrt(count * TestSpawnAspectRatio));
+        int rows = Mathf.CeilToInt((float)count / columns);
+        int row = index / columns;
+        int column = index % columns;
+        int unitsInRow = Mathf.Min(columns, count - row * columns);
+        float x = (column - (unitsInRow - 1) * 0.5f) * TestSpawnSpacing;
+        float z = (row - (rows - 1) * 0.5f) * TestSpawnSpacing;
+        return new Transform3D(Basis.Identity, new Vector3(x, FriendlyUnitHeight, z));
+    }
+
+    private void UpdateDebugOverlay()
+    {
+        _debugMetrics.Text =
+            $"FPS: {Engine.GetFramesPerSecond():0}\n" +
+            $"Friendly: {_friendlyUnits.GetChildCount()}\n" +
+            $"Enemy: {_enemyUnits.GetChildCount()}\n" +
+            $"Selected: {_selectedUnits.Count}\n\n" +
+            "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500";
     }
 
     private void BeginSelectionDrag(Vector2 position)

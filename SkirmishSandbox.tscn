@@ -12,6 +12,17 @@ border_width_right = 1
 border_width_bottom = 1
 border_color = Color(0.35, 0.7, 1, 0.9)
 
+[sub_resource type="StyleBoxFlat" id="StyleBox_debug_panel"]
+bg_color = Color(0.04, 0.05, 0.07, 0.82)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+content_margin_left = 10.0
+content_margin_top = 8.0
+content_margin_right = 10.0
+content_margin_bottom = 8.0
+
 [sub_resource type="Environment" id="Environment_graybox"]
 background_mode = 1
 background_color = Color(0.42, 0.5, 0.6, 1)
@@ -84,6 +95,23 @@ offset_right = 1.0
 offset_bottom = 1.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_selection_rectangle")
+
+[node name="DebugOverlay" type="CanvasLayer" parent="."]
+layer = 20
+
+[node name="MetricsPanel" type="PanelContainer" parent="DebugOverlay"]
+offset_left = 12.0
+offset_top = 12.0
+offset_right = 338.0
+offset_bottom = 132.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBox_debug_panel")
+
+[node name="MetricsLabel" type="Label" parent="DebugOverlay/MetricsPanel"]
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
+theme_override_font_sizes/font_size = 14
+text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected: 0\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500"
 
 [node name="Ground" type="MeshInstance3D" parent="." unique_id=229770619]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
