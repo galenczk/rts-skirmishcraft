@@ -16,6 +16,9 @@ public partial class UnitDefinition : Resource
     public float AttackRange { get; set; } = 2.5f;
 
     [Export]
+    public float EngagementRange { get; set; } = 4.0f;
+
+    [Export]
     public float AttackDamage { get; set; } = 20.0f;
 
     [Export]

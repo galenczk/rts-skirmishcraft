@@ -88,7 +88,7 @@ public partial class SkirmishSandbox : Node3D
         {
             if (mouseButton.IsActionPressed(MoveUnitsAction))
             {
-                TryIssueMoveOrder(mouseButton.Position);
+                HandleContextCommand(mouseButton.Position);
                 GetViewport().SetInputAsHandled();
             }
             else if (mouseButton.IsActionPressed(SelectUnitsAction))
@@ -338,24 +338,9 @@ public partial class SkirmishSandbox : Node3D
 
     private void SelectSingleUnit(Vector2 screenPosition)
     {
-        SelectableUnit closestUnit = null!;
-        float closestDistanceSquared = float.MaxValue;
-
-        foreach (SelectableUnit unit in GetFriendlyUnits())
-        {
-            if (!TryGetUnitScreenBounds(unit, out Rect2 screenBounds) ||
-                !screenBounds.Grow(ClickBoundsPaddingPixels).HasPoint(screenPosition))
-            {
-                continue;
-            }
-
-            float distanceSquared = _camera.GlobalPosition.DistanceSquaredTo(unit.GlobalPosition);
-            if (distanceSquared < closestDistanceSquared)
-            {
-                closestDistanceSquared = distanceSquared;
-                closestUnit = unit;
-            }
-        }
+        SelectableUnit closestUnit = FindUnitAtScreenPosition(
+            screenPosition,
+            SelectableUnit.UnitTeam.Friendly);
 
         ClearSelection();
         if (closestUnit is not null)
@@ -368,7 +353,7 @@ public partial class SkirmishSandbox : Node3D
     {
         ClearSelection();
 
-        foreach (SelectableUnit unit in GetFriendlyUnits())
+        foreach (SelectableUnit unit in GetUnitsForTeam(SelectableUnit.UnitTeam.Friendly))
         {
             if (_camera.IsPositionBehind(unit.GlobalPosition))
             {
@@ -383,13 +368,97 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private IEnumerable<SelectableUnit> GetFriendlyUnits()
+    private SelectableUnit FindUnitAtScreenPosition(
+        Vector2 screenPosition,
+        SelectableUnit.UnitTeam? teamFilter)
     {
-        foreach (Node node in GetTree().GetNodesInGroup(SelectableUnit.FriendlySelectionGroup))
+        SelectableUnit closestUnit = null!;
+        float closestDistanceSquared = float.MaxValue;
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter))
         {
-            if (node is SelectableUnit unit && IsInstanceValid(unit))
+            if (!TryGetUnitScreenBounds(unit, out Rect2 screenBounds) ||
+                !screenBounds.Grow(ClickBoundsPaddingPixels).HasPoint(screenPosition))
+            {
+                continue;
+            }
+
+            float distanceSquared = _camera.GlobalPosition.DistanceSquaredTo(
+                unit.GlobalPosition);
+            if (distanceSquared < closestDistanceSquared)
+            {
+                closestDistanceSquared = distanceSquared;
+                closestUnit = unit;
+            }
+        }
+
+        return closestUnit;
+    }
+
+    private IEnumerable<SelectableUnit> GetUnitsForTeam(
+        SelectableUnit.UnitTeam? teamFilter)
+    {
+        if (teamFilter.HasValue)
+        {
+            foreach (SelectableUnit unit in GetUnitsInGroup(
+                SelectableUnit.GetCombatGroup(teamFilter.Value)))
             {
                 yield return unit;
+            }
+
+            yield break;
+        }
+
+        foreach (SelectableUnit unit in GetUnitsInGroup(
+            SelectableUnit.GetCombatGroup(SelectableUnit.UnitTeam.Friendly)))
+        {
+            yield return unit;
+        }
+
+        foreach (SelectableUnit unit in GetUnitsInGroup(
+            SelectableUnit.GetCombatGroup(SelectableUnit.UnitTeam.Enemy)))
+        {
+            yield return unit;
+        }
+    }
+
+    private IEnumerable<SelectableUnit> GetUnitsInGroup(StringName group)
+    {
+        foreach (Node node in GetTree().GetNodesInGroup(group))
+        {
+            if (node is SelectableUnit unit && IsInstanceValid(unit) && unit.IsAlive)
+            {
+                yield return unit;
+            }
+        }
+    }
+
+    private void HandleContextCommand(Vector2 screenPosition)
+    {
+        SelectableUnit clickedUnit = FindUnitAtScreenPosition(
+            screenPosition,
+            teamFilter: null);
+        if (clickedUnit is not null)
+        {
+            if (clickedUnit.Team == SelectableUnit.UnitTeam.Enemy)
+            {
+                IssueAttackOrder(clickedUnit);
+            }
+
+            return;
+        }
+
+        TryIssueMoveOrder(screenPosition);
+    }
+
+    private void IssueAttackOrder(SelectableUnit target)
+    {
+        PruneInvalidSelection();
+        foreach (SelectableUnit unit in _selectedUnits)
+        {
+            if (IsInstanceValid(unit))
+            {
+                unit.SetAttackTarget(target);
             }
         }
     }

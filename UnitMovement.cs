@@ -10,6 +10,7 @@ public partial class UnitMovement : Node3D
     private Vector3 _moveTarget;
     private bool _hasMoveOrder;
     private bool _initialized;
+    private bool _isShutdown;
 
     public override void _Ready()
     {
@@ -63,6 +64,11 @@ public partial class UnitMovement : Node3D
 
     public void SetMoveTarget(Vector3 worldTarget)
     {
+        if (_isShutdown)
+        {
+            return;
+        }
+
         _moveTarget = worldTarget;
         _navigationAgent.TargetDesiredDistance = GetStoppingDistance();
         _navigationAgent.MaxSpeed = Mathf.Max(_definition.MovementSpeed, 0.0f);
@@ -70,8 +76,17 @@ public partial class UnitMovement : Node3D
         _hasMoveOrder = true;
     }
 
+    public void CancelMoveOrder()
+    {
+        if (!_isShutdown)
+        {
+            _hasMoveOrder = false;
+        }
+    }
+
     public void Stop()
     {
+        _isShutdown = true;
         _hasMoveOrder = false;
         SetPhysicsProcess(false);
     }

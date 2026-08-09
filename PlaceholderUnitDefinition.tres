@@ -8,5 +8,6 @@ MaxHealth = 100.0
 MovementSpeed = 4.0
 StoppingDistance = 0.3
 AttackRange = 2.5
+EngagementRange = 4.0
 AttackDamage = 20.0
 AttackCooldown = 1.0
