@@ -36,13 +36,13 @@ albedo_color = Color(0.31, 0.36, 0.3, 1)
 
 [sub_resource type="BoxMesh" id="Mesh_ground"]
 material = SubResource("Material_ground")
-size = Vector3(40, 0.2, 30)
+size = Vector3(70, 0.2, 52)
 
 [sub_resource type="BoxShape3D" id="Shape_ground"]
-size = Vector3(40, 0.2, 30)
+size = Vector3(70, 0.2, 52)
 
 [sub_resource type="NavigationMesh" id="NavigationMesh_battlefield"]
-vertices = PackedVector3Array(-19, 0, 14, 19, 0, 14, 19, 0, -14, -19, 0, -14)
+vertices = PackedVector3Array(-34, 0, 25, 34, 0, 25, 34, 0, -25, -34, 0, -25)
 polygons = [PackedInt32Array(0, 1, 2, 3)]
 
 [sub_resource type="StandardMaterial3D" id="Material_friendly"]
@@ -80,7 +80,6 @@ pan_speed = 14.0
 zoom_speed = 2.5
 minimum_zoom_distance = 10.0
 maximum_zoom_distance = 32.0
-pan_limits = Vector2(18, 13)
 
 [node name="Camera3D" type="Camera3D" parent="CameraRig" unique_id=1465796435]
 transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 0, 16.39775, 16.39775)

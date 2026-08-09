@@ -16,12 +16,16 @@ public partial class SkirmishSandbox : Node3D
     private const float GroundRayLength = 1000.0f;
     private const uint GroundCollisionMask = 1u;
     private const float DebugOverlayUpdateInterval = 0.25f;
-    private const float TestSpawnSpacing = 1.1f;
-    private const float TestSpawnAspectRatio = 38.0f / 28.0f;
     private const float FriendlyUnitHeight = 0.8f;
 
     [Export]
     public float MoveSlotSpacing { get; set; } = 1.5f;
+
+    [Export]
+    public float DebugSpawnSpacing { get; set; } = 1.1f;
+
+    [Export]
+    public float DebugTeamCenterSeparation { get; set; } = 16.5f;
 
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
@@ -33,6 +37,7 @@ public partial class SkirmishSandbox : Node3D
     private UnitDefinition _enemyUnitDefinition = null!;
     private Transform3D[] _defaultFriendlyTransforms = null!;
     private Transform3D[] _defaultEnemyTransforms = null!;
+    private Vector2 _playableBattlefieldSize;
     private Control _selectionRectangle = null!;
     private Label _debugMetrics = null!;
     private Vector2 _dragStart;
@@ -52,6 +57,8 @@ public partial class SkirmishSandbox : Node3D
         _enemyUnitDefinition = GetNode<SelectableUnit>("EnemyUnits/Enemy01").Definition;
         _defaultFriendlyTransforms = CaptureTransforms(_friendlyUnits);
         _defaultEnemyTransforms = CaptureTransforms(_enemyUnits);
+        _playableBattlefieldSize = GetNavigationSize();
+        ConfigureCameraBounds();
         _selectionRectangle = GetNode<Control>("SelectionOverlay/SelectionRectangle");
         _debugMetrics = GetNode<Label>("DebugOverlay/MetricsPanel/MetricsLabel");
         UpdateDebugOverlay();
@@ -147,7 +154,10 @@ public partial class SkirmishSandbox : Node3D
         {
             Transform3D transform = useDefaultLayout
                 ? _defaultFriendlyTransforms[index]
-                : CreateTestSpawnTransform(index, count);
+                : CreateTestSpawnTransform(
+                    index,
+                    count,
+                    DebugTeamCenterSeparation * 0.5f);
             SelectableUnit unit = new()
             {
                 Name = $"Friendly{index + 1:D3}",
@@ -160,13 +170,17 @@ public partial class SkirmishSandbox : Node3D
 
         if (useDefaultLayout)
         {
-            RespawnDefaultEnemies();
+            RespawnEnemies(useDefaultLayout: true);
+        }
+        else
+        {
+            RespawnEnemies(useDefaultLayout: false);
         }
 
         UpdateDebugOverlay();
     }
 
-    private void RespawnDefaultEnemies()
+    private void RespawnEnemies(bool useDefaultLayout)
     {
         foreach (Node child in _enemyUnits.GetChildren())
         {
@@ -174,15 +188,25 @@ public partial class SkirmishSandbox : Node3D
             child.QueueFree();
         }
 
+        float zOffset = useDefaultLayout
+            ? 0.0f
+            : -DebugTeamCenterSeparation * 0.5f - GetAverageZ(_defaultEnemyTransforms);
+
         for (int index = 0; index < _defaultEnemyTransforms.Length; index++)
         {
+            Transform3D transform = _defaultEnemyTransforms[index];
+            transform.Origin = new Vector3(
+                transform.Origin.X,
+                transform.Origin.Y,
+                transform.Origin.Z + zOffset);
+
             SelectableUnit unit = new()
             {
                 Name = $"Enemy{index + 1:D3}",
                 Mesh = _enemyUnitMesh,
                 Team = SelectableUnit.UnitTeam.Enemy,
                 Definition = _enemyUnitDefinition,
-                Transform = _defaultEnemyTransforms[index],
+                Transform = transform,
             };
             _enemyUnits.AddChild(unit);
         }
@@ -199,16 +223,60 @@ public partial class SkirmishSandbox : Node3D
         return transforms;
     }
 
-    private static Transform3D CreateTestSpawnTransform(int index, int count)
+    private Transform3D CreateTestSpawnTransform(int index, int count, float centerZ)
     {
-        int columns = Mathf.CeilToInt(Mathf.Sqrt(count * TestSpawnAspectRatio));
+        Vector2 playableSize = new(
+            Mathf.Max(_playableBattlefieldSize.X, 1.0f),
+            Mathf.Max(_playableBattlefieldSize.Y, 1.0f));
+        float spacing = Mathf.Max(DebugSpawnSpacing, 0.1f);
+        float aspectRatio = playableSize.X / playableSize.Y;
+        int columns = Mathf.CeilToInt(Mathf.Sqrt(count * aspectRatio));
         int rows = Mathf.CeilToInt((float)count / columns);
         int row = index / columns;
         int column = index % columns;
         int unitsInRow = Mathf.Min(columns, count - row * columns);
-        float x = (column - (unitsInRow - 1) * 0.5f) * TestSpawnSpacing;
-        float z = (row - (rows - 1) * 0.5f) * TestSpawnSpacing;
+        float x = (column - (unitsInRow - 1) * 0.5f) * spacing;
+        float z = centerZ + (row - (rows - 1) * 0.5f) * spacing;
         return new Transform3D(Basis.Identity, new Vector3(x, FriendlyUnitHeight, z));
+    }
+
+    private static float GetAverageZ(Transform3D[] transforms)
+    {
+        float totalZ = 0.0f;
+        foreach (Transform3D transform in transforms)
+        {
+            totalZ += transform.Origin.Z;
+        }
+
+        return totalZ / transforms.Length;
+    }
+
+    private Vector2 GetNavigationSize()
+    {
+        NavigationMesh navigationMesh = GetNode<NavigationRegion3D>(
+            "NavigationRegion3D").NavigationMesh;
+        Vector3[] vertices = navigationMesh.Vertices;
+        float minimumX = float.MaxValue;
+        float maximumX = float.MinValue;
+        float minimumZ = float.MaxValue;
+        float maximumZ = float.MinValue;
+
+        foreach (Vector3 vertex in vertices)
+        {
+            minimumX = Mathf.Min(minimumX, vertex.X);
+            maximumX = Mathf.Max(maximumX, vertex.X);
+            minimumZ = Mathf.Min(minimumZ, vertex.Z);
+            maximumZ = Mathf.Max(maximumZ, vertex.Z);
+        }
+
+        return new Vector2(maximumX - minimumX, maximumZ - minimumZ);
+    }
+
+    private void ConfigureCameraBounds()
+    {
+        GetNode<RtsCameraController>("CameraRig").PanLimits = new Vector2(
+            Mathf.Max(_playableBattlefieldSize.X * 0.5f - 1.0f, 0.0f),
+            Mathf.Max(_playableBattlefieldSize.Y * 0.5f - 1.0f, 0.0f));
     }
 
     private void UpdateDebugOverlay()
