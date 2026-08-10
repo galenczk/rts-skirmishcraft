@@ -33,6 +33,13 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     public bool CanAttack => Definition.CanAttack;
     public bool HasWorkerEconomy => _workerEconomy is not null;
     public int CarriedMaterials => _workerEconomy?.CarriedMaterials ?? 0;
+    public bool IsWorkerTaskIdle => _workerEconomy is not null &&
+        _workerEconomy.Task == WorkerEconomy.WorkerTask.Idle;
+    public bool HasActiveConstructionTask => _workerEconomy is not null &&
+        (_workerEconomy.Task == WorkerEconomy.WorkerTask.MovingToConstruction ||
+            _workerEconomy.Task == WorkerEconomy.WorkerTask.Constructing);
+    public ICombatTarget CurrentCombatTarget =>
+        IsValidCombatTarget(_combatTarget) ? _combatTarget : null!;
     public bool IsSelected { get; private set; }
     public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
     public Vector3 TargetPosition => GlobalPosition;

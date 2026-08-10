@@ -11,6 +11,7 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName Load250UnitScenarioAction = "debug_units_250";
     private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
     private static readonly StringName LoadMixedScenarioAction = "debug_units_mixed";
+    private static readonly StringName LoadMacroScenarioAction = "debug_enemy_macro";
     private static readonly StringName PlaceBuildingAction = "debug_place_building";
     private static readonly StringName CancelConstructionAction = "cancel_construction";
     private static readonly StringName QueueCombatUnitAction = "queue_combat_unit";
@@ -29,6 +30,9 @@ public partial class SkirmishSandbox : Node3D
     private const int MixedCombatUnitsPerTeam = 8;
     private const int MixedWorkersPerTeam = 4;
     private const float MixedWorkerRowOffset = 3.0f;
+    private const int MacroFriendlyCombatUnits = 4;
+    private const int MacroEnemyCombatUnits = 2;
+    private const int MacroWorkersPerTeam = 3;
     private const float DestinationSpacingTolerance = 0.001f;
     private const float UnitPlacementRadius = 0.5f;
 
@@ -75,6 +79,7 @@ public partial class SkirmishSandbox : Node3D
     private Node3D _buildings = null!;
     private Node3D _resourceNodes = null!;
     private TeamResourceLedger _resourceLedger = null!;
+    private EnemyMacroController _enemyMacroController = null!;
     private NavigationRegion3D _navigationRegion = null!;
     private Mesh _friendlyUnitMesh = null!;
     private Mesh _enemyUnitMesh = null!;
@@ -115,6 +120,9 @@ public partial class SkirmishSandbox : Node3D
         _buildings = GetNode<Node3D>("Buildings");
         _resourceNodes = GetNode<Node3D>("ResourceNodes");
         _resourceLedger = GetNode<TeamResourceLedger>("TeamResourceLedger");
+        _enemyMacroController = GetNode<EnemyMacroController>(
+            "EnemyMacroController");
+        _enemyMacroController.Initialize(this, ProductionBuildingDefinition);
         _navigationRegion = GetNode<NavigationRegion3D>("NavigationRegion3D");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
         _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
@@ -273,6 +281,10 @@ public partial class SkirmishSandbox : Node3D
         {
             RespawnMixedRoleScenario();
         }
+        else if (@event.IsActionPressed(LoadMacroScenarioAction))
+        {
+            RespawnMacroScenario();
+        }
         else
         {
             return false;
@@ -322,6 +334,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void BeginScenarioReplacement()
     {
+        _enemyMacroController.Deactivate();
         _isReplacingScenario = true;
         _isMatchTrackingActive = false;
         ClearRegisteredHeadquarters();
@@ -421,6 +434,75 @@ public partial class SkirmishSandbox : Node3D
         ResetScenarioBuildings();
         ResetScenarioResources(includeMaterialsNodes: true);
         EndScenarioReplacement();
+        UpdateDebugOverlay();
+    }
+
+    private void RespawnMacroScenario()
+    {
+        BeginScenarioReplacement();
+        ClearSelection();
+        ClearUnitContainer(_friendlyUnits);
+        ClearUnitContainer(_enemyUnits);
+
+        for (int index = 0; index < MacroFriendlyCombatUnits; index++)
+        {
+            float x = (index - (MacroFriendlyCombatUnits - 1) * 0.5f) * 3.0f;
+            SpawnUnit(
+                _friendlyUnits,
+                $"MacroFriendlyCombat{index + 1:D2}",
+                _friendlyUnitMesh,
+                UnitTeam.Friendly,
+                CombatDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, FriendlyUnitHeight, 8.0f)));
+        }
+
+        for (int index = 0; index < MacroEnemyCombatUnits; index++)
+        {
+            float x = (index - (MacroEnemyCombatUnits - 1) * 0.5f) * 3.0f;
+            SpawnUnit(
+                _enemyUnits,
+                $"MacroEnemyCombat{index + 1:D2}",
+                _enemyUnitMesh,
+                UnitTeam.Enemy,
+                CombatDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, FriendlyUnitHeight, -8.0f)));
+        }
+
+        for (int index = 0; index < MacroWorkersPerTeam; index++)
+        {
+            float x = (index - (MacroWorkersPerTeam - 1) * 0.5f) * 5.0f;
+            SpawnUnit(
+                _friendlyUnits,
+                $"MacroFriendlyWorker{index + 1:D2}",
+                FriendlyWorkerMesh,
+                UnitTeam.Friendly,
+                WorkerDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, WorkerUnitHeight, 13.0f)));
+            SpawnUnit(
+                _enemyUnits,
+                $"MacroEnemyWorker{index + 1:D2}",
+                EnemyWorkerMesh,
+                UnitTeam.Enemy,
+                WorkerDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, WorkerUnitHeight, -13.0f)));
+        }
+
+        ResetScenarioBuildings();
+        ResetScenarioResources(includeMaterialsNodes: false);
+        SpawnMaterialsNode("MacroMaterialsBlueWest", new Vector2(-15.0f, 12.0f));
+        SpawnMaterialsNode("MacroMaterialsBlueEast", new Vector2(15.0f, 12.0f));
+        SpawnMaterialsNode("MacroMaterialsRedWest", new Vector2(-15.0f, -12.0f));
+        SpawnMaterialsNode("MacroMaterialsRedEast", new Vector2(15.0f, -12.0f));
+        EndScenarioReplacement();
+        _enemyMacroController.Activate();
         UpdateDebugOverlay();
     }
 
@@ -1335,9 +1417,11 @@ public partial class SkirmishSandbox : Node3D
             $"Selected units: {_selectedUnits.Count}\n" +
             $"Blue Materials: {_resourceLedger.GetMaterials(UnitTeam.Friendly)}\n" +
             $"Buildings: {friendlyBuildingCount} blue | {enemyBuildingCount} red\n" +
-            $"Building selected: {GetSelectedBuildingStatus()}\n\n" +
+            $"Building selected: {GetSelectedBuildingStatus()}\n" +
+            $"{_enemyMacroController.GetDebugSummary()}\n\n" +
             "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
             "F6 mixed roles + Materials economy\n" +
+            "F7 enemy macro skirmish\n" +
             $"B build production ({Mathf.Max(ProductionBuildingDefinition.MaterialsCost, 0)} Materials)\n" +
             $"Delete cancel selected site " +
             $"({Mathf.RoundToInt(Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f) * 100.0f)}% refund)\n" +
@@ -1419,6 +1503,7 @@ public partial class SkirmishSandbox : Node3D
     {
         _isMatchEnded = true;
         _isMatchTrackingActive = false;
+        _enemyMacroController.Deactivate();
         ClearSelection();
         ClearBuildingSelection();
         CancelPlacementMode();

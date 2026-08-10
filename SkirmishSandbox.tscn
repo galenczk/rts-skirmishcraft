@@ -9,6 +9,7 @@
 [ext_resource type="Script" path="res://TeamResourceLedger.cs" id="7_resource_ledger"]
 [ext_resource type="Resource" path="res://MaterialsNodeDefinition.tres" id="8_materials_definition"]
 [ext_resource type="Resource" path="res://ProductionBuildingDefinition.tres" id="9_production_building"]
+[ext_resource type="Script" path="res://EnemyMacroController.cs" id="10_enemy_macro"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
 bg_color = Color(0.12, 0.45, 1, 0.18)
@@ -91,6 +92,9 @@ DropOffBuildingDefinition = ExtResource("6_building_definition")
 ProductionBuildingDefinition = ExtResource("9_production_building")
 MaterialsDefinition = ExtResource("8_materials_definition")
 
+[node name="EnemyMacroController" type="Node" parent="."]
+script = ExtResource("10_enemy_macro")
+
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1568734586]
 environment = SubResource("Environment_graybox")
 
@@ -129,7 +133,7 @@ layer = 20
 offset_left = 12.0
 offset_top = 12.0
 offset_right = 338.0
-offset_bottom = 324.0
+offset_bottom = 408.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 
@@ -137,7 +141,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed roles + Materials economy\nB build production (30 Materials)\nDelete cancel selected site (75% refund)\nU queue combat unit | X cancel newest\nEsc/right-click cancel placement"
+text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\nRed macro: inactive\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed roles + Materials economy\nF7 enemy macro skirmish\nB build production (30 Materials)\nDelete cancel selected site (75% refund)\nU queue combat unit | X cancel newest\nEsc/right-click cancel placement"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false
