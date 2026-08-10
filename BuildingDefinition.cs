@@ -23,4 +23,7 @@ public partial class BuildingDefinition : Resource
 
     [Export]
     public float ConstructionTime { get; set; }
+
+    [Export]
+    public UnitProductionDefinition Production { get; set; } = null!;
 }

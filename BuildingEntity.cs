@@ -21,6 +21,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
     private MeshInstance3D _selectionMarker = null!;
     private MeshInstance3D _constructionProgressMarker = null!;
     private NavigationObstacle3D _navigationObstacle = null!;
+    private BuildingProduction _production = null!;
     private Material _baseMaterialOverride = null!;
     private StandardMaterial3D _damageFlashMaterial = null!;
     private float _damageFlashRemaining;
@@ -35,6 +36,8 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
     public Vector3 TargetPosition => GlobalPosition;
     public float TargetRadius => Mathf.Max(Definition.FootprintRadius, 0.0f);
     public bool AcceptsMaterials => IsComplete && Definition.AcceptsMaterials;
+    public bool HasProduction => _production is not null;
+    public BuildingProduction Production => _production;
 
     public override void _Ready()
     {
@@ -71,6 +74,13 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         _navigationObstacle = CreateNavigationObstacle();
         AddChild(_navigationObstacle);
         _navigationObstacle.AddToGroup(NavigationSourceGroup);
+        if (Definition.Production is not null)
+        {
+            _production = new BuildingProduction { Name = "Production" };
+            AddChild(_production);
+            _production.Initialize(this, Definition.Production);
+        }
+
         SetProcess(false);
     }
 
@@ -127,6 +137,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         _isGameplayStopped = true;
         IsSelected = false;
         _selectionMarker.Visible = false;
+        _production?.Stop();
     }
 
     public bool TryAssignBuilder(SelectableUnit worker)
@@ -367,6 +378,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         Visible = false;
         RemoveFromGroup(CombatTargetGroups.ForTeam(Team));
         _navigationObstacle.AffectNavigationMesh = false;
+        _production?.Stop();
         if (IsInstanceValid(_activeBuilder))
         {
             _activeBuilder.NotifyConstructionSiteRemoved(this);

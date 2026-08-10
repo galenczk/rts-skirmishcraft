@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="BuildingDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://BuildingDefinition.cs" id="1_definition"]
+[ext_resource type="Resource" path="res://UnitProductionDefinition.tres" id="2_production"]
+
+[resource]
+script = ExtResource("1_definition")
+DisplayName = "Combat Production Building"
+MaxHealth = 250.0
+FootprintRadius = 2.5
+PlaceholderDimensions = Vector3(4.0, 2.2, 3.2)
+AcceptsMaterials = false
+MaterialsCost = 30
+ConstructionTime = 6.0
+Production = ExtResource("2_production")
