@@ -9,6 +9,8 @@ public partial class WorkerEconomy : Node
         Gathering,
         ReturningToDropOff,
         MovingToManualDropOff,
+        MovingToConstruction,
+        Constructing,
     }
 
     private const float MinimumGatherInterval = 0.05f;
@@ -17,6 +19,7 @@ public partial class WorkerEconomy : Node
     private WorkerEconomyDefinition _definition = null!;
     private MaterialsResourceNode _resourceTarget = null!;
     private BuildingEntity _dropOffTarget = null!;
+    private BuildingEntity _constructionTarget = null!;
     private MeshInstance3D _carryingMarker = null!;
     private WorkerTask _task;
     private float _gatherTimeRemaining;
@@ -55,6 +58,12 @@ public partial class WorkerEconomy : Node
             case WorkerTask.MovingToManualDropOff:
                 UpdateMovingToDropOff(manual: true);
                 break;
+            case WorkerTask.MovingToConstruction:
+                UpdateMovingToConstruction();
+                break;
+            case WorkerTask.Constructing:
+                UpdateConstruction(delta);
+                break;
         }
     }
 
@@ -80,6 +89,7 @@ public partial class WorkerEconomy : Node
             return;
         }
 
+        CancelTask();
         _resourceTarget = resourceTarget;
         _dropOffTarget = null!;
         _resourceSlotIndex = slotIndex;
@@ -107,6 +117,7 @@ public partial class WorkerEconomy : Node
             return;
         }
 
+        CancelTask();
         _resourceTarget = null!;
         _dropOffTarget = building;
         _dropOffSlotIndex = slotIndex;
@@ -116,8 +127,44 @@ public partial class WorkerEconomy : Node
         MoveToDropOff(building);
     }
 
+    public bool BeginConstruction(BuildingEntity building)
+    {
+        if (_isStopped || !IsValidConstructionSite(building))
+        {
+            return false;
+        }
+
+        if (!building.TryAssignBuilder(_unit))
+        {
+            return false;
+        }
+
+        CancelTask();
+        if (!building.TryAssignBuilder(_unit))
+        {
+            return false;
+        }
+
+        _constructionTarget = building;
+        MoveToConstruction();
+        return true;
+    }
+
+    public void NotifyConstructionSiteRemoved(BuildingEntity building)
+    {
+        if (_constructionTarget != building)
+        {
+            return;
+        }
+
+        _constructionTarget = null!;
+        _task = WorkerTask.Idle;
+        _unit.StopWorkerTaskMovement();
+    }
+
     public void CancelTask()
     {
+        ClearConstructionAssignment();
         _task = WorkerTask.Idle;
         _resourceTarget = null!;
         _dropOffTarget = null!;
@@ -237,6 +284,49 @@ public partial class WorkerEconomy : Node
         DepositCarriedMaterials(manual);
     }
 
+    private void UpdateMovingToConstruction()
+    {
+        if (!IsValidConstructionSite(_constructionTarget))
+        {
+            BecomeIdleAndStopMoving();
+            return;
+        }
+
+        if (_unit.IsWorkerTaskMoving)
+        {
+            return;
+        }
+
+        if (!IsWithinDropOffInteractionRange(_constructionTarget))
+        {
+            MoveToConstruction();
+            return;
+        }
+
+        _task = WorkerTask.Constructing;
+    }
+
+    private void UpdateConstruction(double delta)
+    {
+        if (!IsValidConstructionSite(_constructionTarget))
+        {
+            BecomeIdleAndStopMoving();
+            return;
+        }
+
+        if (_unit.IsWorkerTaskMoving ||
+            !IsWithinDropOffInteractionRange(_constructionTarget))
+        {
+            return;
+        }
+
+        if (_constructionTarget.AdvanceConstruction(_unit, delta))
+        {
+            _constructionTarget = null!;
+            BecomeIdleAndStopMoving();
+        }
+    }
+
     private void BeginReturnToDropOff()
     {
         if (CarriedMaterials <= 0)
@@ -278,15 +368,40 @@ public partial class WorkerEconomy : Node
 
     private void MoveToDropOff(BuildingEntity building)
     {
-        int slotCount = Mathf.Max(_dropOffSlotCount, 1);
-        int slotIndex = Mathf.PosMod(_dropOffSlotIndex, slotCount);
-        float angle = Mathf.Tau * slotIndex / slotCount;
-        float distance = building.TargetRadius +
+        Vector3 interactionPosition = building.GetInteractionPosition(
+            _dropOffSlotIndex,
+            _dropOffSlotCount,
+            _definition.InteractionRange);
+        _unit.MoveForWorkerTask(
+            ProjectToNavigation(interactionPosition),
+            _unit.Definition.StoppingDistance);
+    }
+
+    private void MoveToConstruction()
+    {
+        if (!IsValidConstructionSite(_constructionTarget))
+        {
+            BecomeIdleAndStopMoving();
+            return;
+        }
+
+        Vector2 approachDirection = new(
+            _unit.GlobalPosition.X - _constructionTarget.GlobalPosition.X,
+            _unit.GlobalPosition.Z - _constructionTarget.GlobalPosition.Z);
+        if (approachDirection.IsZeroApprox())
+        {
+            approachDirection = Vector2.Right;
+        }
+
+        approachDirection = approachDirection.Normalized();
+        float distance = _constructionTarget.TargetRadius +
             Mathf.Max(_definition.InteractionRange, 0.0f) * 0.5f;
-        Vector3 interactionPosition = building.GlobalPosition + new Vector3(
-            Mathf.Cos(angle) * distance,
-            0.0f,
-            Mathf.Sin(angle) * distance);
+        Vector3 interactionPosition = _constructionTarget.GlobalPosition +
+            new Vector3(
+                approachDirection.X * distance,
+                0.0f,
+                approachDirection.Y * distance);
+        _task = WorkerTask.MovingToConstruction;
         _unit.MoveForWorkerTask(
             ProjectToNavigation(interactionPosition),
             _unit.Definition.StoppingDistance);
@@ -330,6 +445,7 @@ public partial class WorkerEconomy : Node
 
     private void BecomeIdleAndStopMoving()
     {
+        ClearConstructionAssignment();
         _task = WorkerTask.Idle;
         _dropOffTarget = null!;
         _gatherTimeRemaining = 0.0f;
@@ -380,6 +496,25 @@ public partial class WorkerEconomy : Node
             building.IsAlive &&
             building.Team == _unit.Team &&
             building.AcceptsMaterials;
+    }
+
+    private bool IsValidConstructionSite(BuildingEntity building)
+    {
+        return IsInstanceValid(building) &&
+            !building.IsQueuedForDeletion() &&
+            building.IsAlive &&
+            !building.IsComplete &&
+            building.Team == _unit.Team;
+    }
+
+    private void ClearConstructionAssignment()
+    {
+        if (IsInstanceValid(_constructionTarget))
+        {
+            _constructionTarget.ReleaseBuilder(_unit);
+        }
+
+        _constructionTarget = null!;
     }
 
     private bool IsWithinResourceInteractionRange(MaterialsResourceNode resource)

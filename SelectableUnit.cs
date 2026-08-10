@@ -170,6 +170,20 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         _workerEconomy.BeginManualDropOff(building, slotIndex, slotCount);
     }
 
+    public bool SetConstructionTarget(BuildingEntity building)
+    {
+        if (Team != UnitTeam.Friendly ||
+            !IsAlive ||
+            _isGameplayStopped ||
+            _workerEconomy is null)
+        {
+            return false;
+        }
+
+        ClearCombatTarget();
+        return _workerEconomy.BeginConstruction(building);
+    }
+
     public void SetAttackTarget(ICombatTarget target)
     {
         if (Team != UnitTeam.Friendly ||
@@ -264,6 +278,11 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         {
             Activity = UnitActivity.Idle;
         }
+    }
+
+    internal void NotifyConstructionSiteRemoved(BuildingEntity building)
+    {
+        _workerEconomy?.NotifyConstructionSiteRemoved(building);
     }
 
     private void TryBeginIdleEngagement()

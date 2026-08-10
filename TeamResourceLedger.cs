@@ -28,6 +28,22 @@ public partial class TeamResourceLedger : Node
         }
     }
 
+    public bool CanAfford(UnitTeam team, int amount)
+    {
+        return amount >= 0 && _materialsByTeam[(int)team] >= amount;
+    }
+
+    public bool TrySpend(UnitTeam team, int amount)
+    {
+        if (!CanAfford(team, amount))
+        {
+            return false;
+        }
+
+        _materialsByTeam[(int)team] -= amount;
+        return true;
+    }
+
     public void Reset()
     {
         int initialMaterials = Mathf.Max(InitialMaterials, 0);

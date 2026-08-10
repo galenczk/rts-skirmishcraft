@@ -12,6 +12,7 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
     private static readonly StringName LoadMixedScenarioAction = "debug_units_mixed";
     private static readonly StringName PlaceBuildingAction = "debug_place_building";
+    private static readonly StringName CancelConstructionAction = "cancel_construction";
     private static readonly StringName CancelPlacementAction = "ui_cancel";
     private static readonly StringName RestartMatchAction = "restart_match";
     private static readonly StringName MovementGroundGroup = "movement_ground";
@@ -55,6 +56,9 @@ public partial class SkirmishSandbox : Node3D
 
     [Export]
     public MaterialsNodeDefinition MaterialsDefinition { get; set; } = null!;
+
+    [Export(PropertyHint.Range, "0,1,0.05")]
+    public float ConstructionRefundFraction { get; set; } = 0.75f;
 
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
@@ -172,6 +176,13 @@ public partial class SkirmishSandbox : Node3D
         if (@event.IsActionPressed(PlaceBuildingAction))
         {
             EnterPlacementMode();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (@event.IsActionPressed(CancelConstructionAction))
+        {
+            TryCancelSelectedConstruction();
             GetViewport().SetInputAsHandled();
             return;
         }
@@ -427,7 +438,8 @@ public partial class SkirmishSandbox : Node3D
     private BuildingEntity SpawnBuilding(
         string name,
         UnitTeam team,
-        Vector3 groundPosition)
+        Vector3 groundPosition,
+        bool startsComplete = true)
     {
         Vector3 dimensions = TestBuildingDefinition.PlaceholderDimensions;
         BuildingEntity building = new()
@@ -435,6 +447,7 @@ public partial class SkirmishSandbox : Node3D
             Name = name,
             Team = team,
             Definition = TestBuildingDefinition,
+            StartsComplete = startsComplete,
             Mesh = BuildingEntity.CreatePlaceholderMesh(
                 TestBuildingDefinition,
                 team,
@@ -559,7 +572,12 @@ public partial class SkirmishSandbox : Node3D
 
     private void EnterPlacementMode()
     {
-        ClearSelection();
+        PruneInvalidSelection();
+        if (FindClosestSelectedWorker(Vector3.Zero) is null)
+        {
+            return;
+        }
+
         ClearBuildingSelection();
         _isDragging = false;
         _selectionRectangle.Visible = false;
@@ -625,7 +643,11 @@ public partial class SkirmishSandbox : Node3D
             groundPosition.X,
             height * 0.5f,
             groundPosition.Z);
-        _isPlacementValid = IsBuildingPlacementValid(groundPosition);
+        _isPlacementValid = IsBuildingPlacementValid(groundPosition) &&
+            FindClosestSelectedWorker(groundPosition) is not null &&
+            _resourceLedger.CanAfford(
+                UnitTeam.Friendly,
+                Mathf.Max(TestBuildingDefinition.MaterialsCost, 0));
         _placementPreview.MaterialOverride = _isPlacementValid
             ? _validPlacementMaterial
             : _invalidPlacementMaterial;
@@ -644,13 +666,52 @@ public partial class SkirmishSandbox : Node3D
             _placementPreview.Position.X,
             0.0f,
             _placementPreview.Position.Z);
+        SelectableUnit builder = FindClosestSelectedWorker(groundPosition);
+        int materialsCost = Mathf.Max(TestBuildingDefinition.MaterialsCost, 0);
+        if (builder is null ||
+            !_resourceLedger.TrySpend(UnitTeam.Friendly, materialsCost))
+        {
+            return;
+        }
+
         _runtimeBuildingSerial++;
-        SpawnBuilding(
+        BuildingEntity constructionSite = SpawnBuilding(
             $"FriendlyPlacedBuilding{_runtimeBuildingSerial:D3}",
             UnitTeam.Friendly,
-            groundPosition);
+            groundPosition,
+            startsComplete: false);
+        if (!builder.SetConstructionTarget(constructionSite))
+        {
+            constructionSite.CancelConstruction();
+            _resourceLedger.Deposit(UnitTeam.Friendly, materialsCost);
+            return;
+        }
+
         CancelPlacementMode();
         QueueNavigationRebuild();
+    }
+
+    private void TryCancelSelectedConstruction()
+    {
+        PruneInvalidBuildingSelection();
+        if (_selectedBuilding is null ||
+            _selectedBuilding.Team != UnitTeam.Friendly ||
+            _selectedBuilding.IsComplete)
+        {
+            return;
+        }
+
+        BuildingEntity constructionSite = _selectedBuilding;
+        int materialsCost = Mathf.Max(
+            constructionSite.Definition.MaterialsCost,
+            0);
+        int refund = Mathf.FloorToInt(
+            materialsCost * Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f));
+        if (constructionSite.CancelConstruction())
+        {
+            _resourceLedger.Deposit(UnitTeam.Friendly, refund);
+            _selectedBuilding = null!;
+        }
     }
 
     private void CancelPlacementMode()
@@ -712,6 +773,26 @@ public partial class SkirmishSandbox : Node3D
             Vector2 unitCenter = new(unit.GlobalPosition.X, unit.GlobalPosition.Z);
             float requiredDistance = footprintRadius + UnitPlacementRadius;
             if (candidateCenter.DistanceSquaredTo(unitCenter) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        foreach (Node child in _resourceNodes.GetChildren())
+        {
+            if (child is not MaterialsResourceNode resourceNode ||
+                !IsInstanceValid(resourceNode))
+            {
+                continue;
+            }
+
+            Vector2 resourceCenter = new(
+                resourceNode.GlobalPosition.X,
+                resourceNode.GlobalPosition.Z);
+            float requiredDistance = footprintRadius +
+                resourceNode.InteractionRadius;
+            if (candidateCenter.DistanceSquaredTo(resourceCenter) <
                 requiredDistance * requiredDistance)
             {
                 return false;
@@ -782,10 +863,26 @@ public partial class SkirmishSandbox : Node3D
             $"Selected units: {_selectedUnits.Count}\n" +
             $"Blue Materials: {_resourceLedger.GetMaterials(UnitTeam.Friendly)}\n" +
             $"Buildings: {friendlyBuildingCount} blue | {enemyBuildingCount} red\n" +
-            $"Building selected: {(_selectedBuilding is null ? "no" : "yes")}\n\n" +
+            $"Building selected: {GetSelectedBuildingStatus()}\n\n" +
             "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
             "F6 mixed roles + Materials economy\n" +
-            "B place building | Esc/right-click cancel";
+            $"B build ({Mathf.Max(TestBuildingDefinition.MaterialsCost, 0)} Materials)\n" +
+            $"Delete cancel selected site " +
+            $"({Mathf.RoundToInt(Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f) * 100.0f)}% refund)\n" +
+            "Esc/right-click cancel placement";
+    }
+
+    private string GetSelectedBuildingStatus()
+    {
+        if (_selectedBuilding is null)
+        {
+            return "no";
+        }
+
+        return _selectedBuilding.IsComplete
+            ? "complete"
+            : $"site {_selectedBuilding.ConstructionProgress * 100.0f:0}% " +
+                $"({_selectedBuilding.Health:0} HP)";
     }
 
     private void EvaluateMatchOutcome()
@@ -1043,9 +1140,14 @@ public partial class SkirmishSandbox : Node3D
                 IssueAttackOrder(clickedTarget);
             }
             else if (clickedTarget is BuildingEntity building &&
-                     building.AcceptsMaterials)
+                     !building.IsComplete)
             {
-                IssueManualDropOffOrder(building);
+                IssueConstructionOrder(building);
+            }
+            else if (clickedTarget is BuildingEntity completedBuilding &&
+                     completedBuilding.AcceptsMaterials)
+            {
+                IssueManualDropOffOrder(completedBuilding);
             }
 
             return;
@@ -1104,6 +1206,45 @@ public partial class SkirmishSandbox : Node3D
         {
             workers[index].SetManualDropOff(building, index, workers.Count);
         }
+    }
+
+    private void IssueConstructionOrder(BuildingEntity constructionSite)
+    {
+        SelectableUnit builder = FindClosestSelectedWorker(
+            constructionSite.GlobalPosition);
+        builder?.SetConstructionTarget(constructionSite);
+    }
+
+    private SelectableUnit FindClosestSelectedWorker(Vector3 position)
+    {
+        PruneInvalidSelection();
+        SelectableUnit closestWorker = null!;
+        float closestDistanceSquared = float.MaxValue;
+        foreach (SelectableUnit unit in _selectedUnits)
+        {
+            if (!IsInstanceValid(unit) || !unit.HasWorkerEconomy)
+            {
+                continue;
+            }
+
+            Vector2 horizontalDelta = new(
+                unit.GlobalPosition.X - position.X,
+                unit.GlobalPosition.Z - position.Z);
+            float distanceSquared = horizontalDelta.LengthSquared();
+            bool isCloser = distanceSquared < closestDistanceSquared;
+            bool winsTie = Mathf.IsEqualApprox(
+                    distanceSquared,
+                    closestDistanceSquared) &&
+                (closestWorker is null ||
+                    unit.GetInstanceId() < closestWorker.GetInstanceId());
+            if (isCloser || winsTie)
+            {
+                closestWorker = unit;
+                closestDistanceSquared = distanceSquared;
+            }
+        }
+
+        return closestWorker;
     }
 
     private void TryIssueMoveOrder(Vector2 screenPosition)

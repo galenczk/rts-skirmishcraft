@@ -23,10 +23,13 @@ Do not treat results from one machine as generally representative. Record the Go
 - `F5`: respawn 500 friendly units.
 - `F6`: load the mixed-role scenario with eight combat units and four workers per team.
 - `B`: enter developer building-placement mode.
+- Building placement requires a selected blue worker and 20 deposited Materials. A confirmed site assigns the closest selected worker.
 - Left click while placing: confirm a valid green placement.
 - Right click or `Escape` while placing: cancel without issuing a command.
+- Right click an incomplete friendly building with workers selected: assign the closest selected worker to construct or resume it.
+- `Delete`: cancel a selected incomplete friendly building and refund 75% of its cost.
 
-Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. The test buildings accept Materials; buildings placed with `B` also become valid blue drop-offs.
+Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. Buildings placed with `B` begin as translucent construction sites with a progress marker. Once a worker completes one, it becomes a normal blue Materials drop-off.
 
 After Phase 6, red and blue units can damage one another when they are within attack range. For a movement-only baseline, issue commands away from the red group and record the run before combat changes either unit count. Combat-enabled runs should be labeled separately rather than compared directly with pre-combat movement baselines.
 

@@ -17,4 +17,10 @@ public partial class BuildingDefinition : Resource
 
     [Export]
     public bool AcceptsMaterials { get; set; }
+
+    [Export]
+    public int MaterialsCost { get; set; }
+
+    [Export]
+    public float ConstructionTime { get; set; }
 }

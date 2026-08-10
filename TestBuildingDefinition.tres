@@ -9,3 +9,5 @@ MaxHealth = 200.0
 FootprintRadius = 2.0
 PlaceholderDimensions = Vector3(2.8, 3.0, 2.8)
 AcceptsMaterials = true
+MaterialsCost = 20
+ConstructionTime = 5.0
