@@ -46,8 +46,12 @@ public partial class TeamResourceLedger : Node
 
     public void Reset()
     {
-        int initialMaterials = Mathf.Max(InitialMaterials, 0);
-        _materialsByTeam[(int)UnitTeam.Friendly] = initialMaterials;
-        _materialsByTeam[(int)UnitTeam.Enemy] = initialMaterials;
+        ResetTeam(UnitTeam.Friendly);
+        ResetTeam(UnitTeam.Enemy);
+    }
+
+    public void ResetTeam(UnitTeam team)
+    {
+        _materialsByTeam[(int)team] = Mathf.Max(InitialMaterials, 0);
     }
 }

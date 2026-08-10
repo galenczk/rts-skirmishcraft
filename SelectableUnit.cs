@@ -119,61 +119,59 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         _presentation.SetSelected(selected);
     }
 
-    public void SetMoveTarget(Vector3 worldTarget)
+    public bool SetMoveTarget(Vector3 worldTarget)
     {
-        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
+        if (!IsAlive || _isGameplayStopped)
         {
-            return;
+            return false;
         }
 
         _workerEconomy?.CancelTask();
         ClearCombatTarget();
         Activity = UnitActivity.Moving;
         _movement.SetMoveTarget(worldTarget, Definition.StoppingDistance);
+        return true;
     }
 
-    public void SetGatherTarget(
+    public bool SetGatherTarget(
         MaterialsResourceNode target,
         int slotIndex,
         int slotCount)
     {
-        if (Team != UnitTeam.Friendly ||
-            !IsAlive ||
+        if (!IsAlive ||
             _isGameplayStopped ||
             _workerEconomy is null)
         {
-            return;
+            return false;
         }
 
         ClearCombatTarget();
         _movement.CancelMoveOrder();
         Activity = UnitActivity.Idle;
-        _workerEconomy.BeginGathering(target, slotIndex, slotCount);
+        return _workerEconomy.BeginGathering(target, slotIndex, slotCount);
     }
 
-    public void SetManualDropOff(
+    public bool SetManualDropOff(
         BuildingEntity building,
         int slotIndex,
         int slotCount)
     {
-        if (Team != UnitTeam.Friendly ||
-            !IsAlive ||
+        if (!IsAlive ||
             _isGameplayStopped ||
             _workerEconomy is null)
         {
-            return;
+            return false;
         }
 
         ClearCombatTarget();
         _movement.CancelMoveOrder();
         Activity = UnitActivity.Idle;
-        _workerEconomy.BeginManualDropOff(building, slotIndex, slotCount);
+        return _workerEconomy.BeginManualDropOff(building, slotIndex, slotCount);
     }
 
     public bool SetConstructionTarget(BuildingEntity building)
     {
-        if (Team != UnitTeam.Friendly ||
-            !IsAlive ||
+        if (!IsAlive ||
             _isGameplayStopped ||
             _workerEconomy is null)
         {
@@ -184,23 +182,37 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         return _workerEconomy.BeginConstruction(building);
     }
 
-    public void SetAttackTarget(ICombatTarget target)
+    public bool SetAttackTarget(ICombatTarget target)
     {
-        if (Team != UnitTeam.Friendly ||
-            !IsAlive ||
+        if (!IsAlive ||
             _isGameplayStopped ||
             !CanAttack)
         {
-            return;
+            return false;
         }
 
         if (!IsValidCombatTarget(target))
         {
-            return;
+            return false;
         }
 
         _movement.CancelMoveOrder();
         BeginEngagement(target);
+        return true;
+    }
+
+    public bool CancelCurrentOrder()
+    {
+        if (!IsAlive || _isGameplayStopped)
+        {
+            return false;
+        }
+
+        _workerEconomy?.CancelTask();
+        _movement.CancelMoveOrder();
+        ClearCombatTarget();
+        Activity = UnitActivity.Idle;
+        return true;
     }
 
     public void TakeDamage(float damage)

@@ -496,7 +496,7 @@ public partial class SkirmishSandbox : Node3D
                         spawnHeight,
                         spawnPosition.Z)));
             production.AcknowledgeSpawn();
-            if (production.HasRallyPoint && building.Team == UnitTeam.Friendly)
+            if (production.HasRallyPoint)
             {
                 producedUnit.SetMoveTarget(production.RallyPoint);
             }
@@ -643,7 +643,8 @@ public partial class SkirmishSandbox : Node3D
         Vector3 groundPosition,
         BuildingDefinition definition,
         bool startsComplete = true,
-        bool registerAsHeadquarters = false)
+        bool registerAsHeadquarters = false,
+        int constructionMaterialsCost = 0)
     {
         Vector3 dimensions = definition.PlaceholderDimensions;
         BuildingEntity building = new()
@@ -652,6 +653,7 @@ public partial class SkirmishSandbox : Node3D
             Team = team,
             Definition = definition,
             StartsComplete = startsComplete,
+            ConstructionMaterialsCost = Mathf.Max(constructionMaterialsCost, 0),
             Mesh = BuildingEntity.CreatePlaceholderMesh(
                 definition,
                 team,
@@ -669,6 +671,168 @@ public partial class SkirmishSandbox : Node3D
         }
 
         return building;
+    }
+
+    public bool TryStartConstruction(
+        UnitTeam team,
+        SelectableUnit builder,
+        BuildingDefinition definition,
+        Vector3 groundPosition,
+        out BuildingEntity constructionSite)
+    {
+        constructionSite = null!;
+        if (_isReplacingScenario ||
+            _isMatchEnded ||
+            !IsSupportedTeam(team) ||
+            !IsInstanceValid(builder) ||
+            builder.IsQueuedForDeletion() ||
+            !builder.IsAlive ||
+            builder.Team != team ||
+            !builder.HasWorkerEconomy ||
+            !IsValidConstructionDefinition(definition) ||
+            !IsBuildingPlacementValid(definition, groundPosition))
+        {
+            return false;
+        }
+
+        int materialsCost = Mathf.Max(definition.MaterialsCost, 0);
+        if (!_resourceLedger.TrySpend(team, materialsCost))
+        {
+            return false;
+        }
+
+        _runtimeBuildingSerial++;
+        string teamName = team == UnitTeam.Friendly ? "Friendly" : "Enemy";
+        constructionSite = SpawnBuilding(
+            $"{teamName}PlacedBuilding{_runtimeBuildingSerial:D3}",
+            team,
+            groundPosition,
+            definition,
+            startsComplete: false,
+            constructionMaterialsCost: materialsCost);
+        if (!builder.SetConstructionTarget(constructionSite))
+        {
+            constructionSite.CancelConstruction();
+            _resourceLedger.Deposit(team, materialsCost);
+            constructionSite = null!;
+            return false;
+        }
+
+        QueueNavigationRebuild();
+        return true;
+    }
+
+    public bool TryCancelConstruction(
+        UnitTeam team,
+        BuildingEntity constructionSite)
+    {
+        if (_isReplacingScenario ||
+            _isMatchEnded ||
+            !IsSupportedTeam(team) ||
+            !IsInstanceValid(constructionSite) ||
+            constructionSite.IsQueuedForDeletion() ||
+            !constructionSite.IsAlive ||
+            constructionSite.IsComplete ||
+            constructionSite.Team != team)
+        {
+            return false;
+        }
+
+        int refund = Mathf.FloorToInt(
+            constructionSite.ConstructionMaterialsCost *
+            Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f));
+        if (!constructionSite.CancelConstruction())
+        {
+            return false;
+        }
+
+        _resourceLedger.Deposit(team, refund);
+        return true;
+    }
+
+    public bool TryQueueCombatUnit(
+        UnitTeam team,
+        BuildingEntity productionBuilding)
+    {
+        return !_isReplacingScenario &&
+            !_isMatchEnded &&
+            IsSupportedTeam(team) &&
+            IsInstanceValid(productionBuilding) &&
+            !productionBuilding.IsQueuedForDeletion() &&
+            productionBuilding.IsAlive &&
+            productionBuilding.Team == team &&
+            productionBuilding.IsComplete &&
+            productionBuilding.HasProduction &&
+            productionBuilding.Production.TryQueueUnit(_resourceLedger);
+    }
+
+    public bool TryCancelQueuedUnit(
+        UnitTeam team,
+        BuildingEntity productionBuilding)
+    {
+        return !_isReplacingScenario &&
+            !_isMatchEnded &&
+            IsSupportedTeam(team) &&
+            IsInstanceValid(productionBuilding) &&
+            !productionBuilding.IsQueuedForDeletion() &&
+            productionBuilding.IsAlive &&
+            productionBuilding.Team == team &&
+            productionBuilding.IsComplete &&
+            productionBuilding.HasProduction &&
+            productionBuilding.Production.CancelMostRecentUnit(_resourceLedger);
+    }
+
+    public bool TrySetProductionRallyPoint(
+        UnitTeam team,
+        BuildingEntity productionBuilding,
+        Vector3 requestedWorldPosition)
+    {
+        if (_isReplacingScenario ||
+            _isMatchEnded ||
+            !IsSupportedTeam(team) ||
+            !IsInstanceValid(productionBuilding) ||
+            productionBuilding.IsQueuedForDeletion() ||
+            !productionBuilding.IsAlive ||
+            productionBuilding.Team != team ||
+            !productionBuilding.IsComplete ||
+            !productionBuilding.HasProduction)
+        {
+            return false;
+        }
+
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        {
+            return false;
+        }
+
+        Vector3 rallyPoint = NavigationServer3D.MapGetClosestPoint(
+            navigationMap,
+            requestedWorldPosition);
+        Vector2 requested = new(requestedWorldPosition.X, requestedWorldPosition.Z);
+        Vector2 projected = new(rallyPoint.X, rallyPoint.Z);
+        if (requested.DistanceSquaredTo(projected) > 0.25f)
+        {
+            return false;
+        }
+
+        productionBuilding.Production.SetRallyPoint(rallyPoint);
+        return true;
+    }
+
+    private static bool IsSupportedTeam(UnitTeam team)
+    {
+        return team == UnitTeam.Friendly || team == UnitTeam.Enemy;
+    }
+
+    private static bool IsValidConstructionDefinition(
+        BuildingDefinition definition)
+    {
+        return definition is not null &&
+            !definition.IsHeadquarters &&
+            definition.PlaceholderDimensions.X > 0.0f &&
+            definition.PlaceholderDimensions.Y > 0.0f &&
+            definition.PlaceholderDimensions.Z > 0.0f;
     }
 
     private void ClearRegisteredHeadquarters()
@@ -929,7 +1093,9 @@ public partial class SkirmishSandbox : Node3D
             groundPosition.X,
             height * 0.5f,
             groundPosition.Z);
-        _isPlacementValid = IsBuildingPlacementValid(groundPosition) &&
+        _isPlacementValid = IsBuildingPlacementValid(
+                ProductionBuildingDefinition,
+                groundPosition) &&
             FindClosestSelectedWorker(groundPosition) is not null &&
             _resourceLedger.CanAfford(
                 UnitTeam.Friendly,
@@ -953,31 +1119,18 @@ public partial class SkirmishSandbox : Node3D
             0.0f,
             _placementPreview.Position.Z);
         SelectableUnit builder = FindClosestSelectedWorker(groundPosition);
-        int materialsCost = Mathf.Max(
-            ProductionBuildingDefinition.MaterialsCost,
-            0);
         if (builder is null ||
-            !_resourceLedger.TrySpend(UnitTeam.Friendly, materialsCost))
+            !TryStartConstruction(
+                UnitTeam.Friendly,
+                builder,
+                ProductionBuildingDefinition,
+                groundPosition,
+                out _))
         {
-            return;
-        }
-
-        _runtimeBuildingSerial++;
-        BuildingEntity constructionSite = SpawnBuilding(
-            $"FriendlyPlacedBuilding{_runtimeBuildingSerial:D3}",
-            UnitTeam.Friendly,
-            groundPosition,
-            ProductionBuildingDefinition,
-            startsComplete: false);
-        if (!builder.SetConstructionTarget(constructionSite))
-        {
-            constructionSite.CancelConstruction();
-            _resourceLedger.Deposit(UnitTeam.Friendly, materialsCost);
             return;
         }
 
         CancelPlacementMode();
-        QueueNavigationRebuild();
     }
 
     private void TryCancelSelectedConstruction()
@@ -990,15 +1143,8 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        BuildingEntity constructionSite = _selectedBuilding;
-        int materialsCost = Mathf.Max(
-            constructionSite.Definition.MaterialsCost,
-            0);
-        int refund = Mathf.FloorToInt(
-            materialsCost * Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f));
-        if (constructionSite.CancelConstruction())
+        if (TryCancelConstruction(UnitTeam.Friendly, _selectedBuilding))
         {
-            _resourceLedger.Deposit(UnitTeam.Friendly, refund);
             _selectedBuilding = null!;
         }
     }
@@ -1014,7 +1160,7 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        _selectedBuilding.Production.TryQueueUnit(_resourceLedger);
+        TryQueueCombatUnit(UnitTeam.Friendly, _selectedBuilding);
         UpdateDebugOverlay();
     }
 
@@ -1029,7 +1175,7 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        _selectedBuilding.Production.CancelMostRecentUnit(_resourceLedger);
+        TryCancelQueuedUnit(UnitTeam.Friendly, _selectedBuilding);
         UpdateDebugOverlay();
     }
 
@@ -1045,7 +1191,9 @@ public partial class SkirmishSandbox : Node3D
         _placementPreview = null!;
     }
 
-    private bool IsBuildingPlacementValid(Vector3 groundPosition)
+    private bool IsBuildingPlacementValid(
+        BuildingDefinition definition,
+        Vector3 groundPosition)
     {
         if (_navigationRegion.IsBaking() ||
             NavigationServer3D.MapGetIterationId(GetWorld3D().NavigationMap) == 0)
@@ -1053,7 +1201,12 @@ public partial class SkirmishSandbox : Node3D
             return false;
         }
 
-        Vector3 dimensions = ProductionBuildingDefinition.PlaceholderDimensions;
+        if (!IsValidConstructionDefinition(definition))
+        {
+            return false;
+        }
+
+        Vector3 dimensions = definition.PlaceholderDimensions;
         Vector2 halfSize = new(
             Mathf.Max(dimensions.X * 0.5f, 0.0f),
             Mathf.Max(dimensions.Z * 0.5f, 0.0f));
@@ -1071,7 +1224,7 @@ public partial class SkirmishSandbox : Node3D
         }
 
         float footprintRadius = Mathf.Max(
-            ProductionBuildingDefinition.FootprintRadius,
+            definition.FootprintRadius,
             0.0f);
         Vector2 candidateCenter = new(groundPosition.X, groundPosition.Z);
         foreach (BuildingEntity building in GetLivingBuildings())
@@ -1450,7 +1603,10 @@ public partial class SkirmishSandbox : Node3D
     {
         foreach (Node node in GetTree().GetNodesInGroup(group))
         {
-            if (node is SelectableUnit unit && IsInstanceValid(unit) && unit.IsAlive)
+            if (node is SelectableUnit unit &&
+                IsInstanceValid(unit) &&
+                !unit.IsQueuedForDeletion() &&
+                unit.IsAlive)
             {
                 yield return unit;
             }
@@ -1507,24 +1663,13 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        Rid navigationMap = GetWorld3D().NavigationMap;
-        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        if (TrySetProductionRallyPoint(
+                UnitTeam.Friendly,
+                _selectedBuilding,
+                groundPosition))
         {
-            return;
+            UpdateDebugOverlay();
         }
-
-        Vector3 rallyPoint = NavigationServer3D.MapGetClosestPoint(
-            navigationMap,
-            groundPosition);
-        Vector2 requested = new(groundPosition.X, groundPosition.Z);
-        Vector2 projected = new(rallyPoint.X, rallyPoint.Z);
-        if (requested.DistanceSquaredTo(projected) > 0.25f)
-        {
-            return;
-        }
-
-        _selectedBuilding.Production.SetRallyPoint(rallyPoint);
-        UpdateDebugOverlay();
     }
 
     private void IssueAttackOrder(ICombatTarget target)
@@ -1532,7 +1677,7 @@ public partial class SkirmishSandbox : Node3D
         PruneInvalidSelection();
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (IsInstanceValid(unit))
+            if (IsInstanceValid(unit) && unit.Team == UnitTeam.Friendly)
             {
                 unit.SetAttackTarget(target);
             }
@@ -1545,7 +1690,9 @@ public partial class SkirmishSandbox : Node3D
         List<SelectableUnit> workers = new();
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (IsInstanceValid(unit) && unit.HasWorkerEconomy)
+            if (IsInstanceValid(unit) &&
+                unit.Team == UnitTeam.Friendly &&
+                unit.HasWorkerEconomy)
             {
                 workers.Add(unit);
             }
@@ -1565,7 +1712,9 @@ public partial class SkirmishSandbox : Node3D
         List<SelectableUnit> workers = new();
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (IsInstanceValid(unit) && unit.HasWorkerEconomy)
+            if (IsInstanceValid(unit) &&
+                unit.Team == UnitTeam.Friendly &&
+                unit.HasWorkerEconomy)
             {
                 workers.Add(unit);
             }
@@ -1593,7 +1742,9 @@ public partial class SkirmishSandbox : Node3D
         float closestDistanceSquared = float.MaxValue;
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (!IsInstanceValid(unit) || !unit.HasWorkerEconomy)
+            if (!IsInstanceValid(unit) ||
+                unit.Team != UnitTeam.Friendly ||
+                !unit.HasWorkerEconomy)
             {
                 continue;
             }
@@ -2126,6 +2277,13 @@ public partial class SkirmishSandbox : Node3D
 
     private void AddToSelection(SelectableUnit unit)
     {
+        if (!IsInstanceValid(unit) ||
+            !unit.IsAlive ||
+            unit.Team != UnitTeam.Friendly)
+        {
+            return;
+        }
+
         ClearBuildingSelection();
         unit.SetSelected(true);
         _selectedUnits.Add(unit);
@@ -2133,6 +2291,13 @@ public partial class SkirmishSandbox : Node3D
 
     private void SelectBuilding(BuildingEntity building)
     {
+        if (!IsInstanceValid(building) ||
+            !building.IsAlive ||
+            building.Team != UnitTeam.Friendly)
+        {
+            return;
+        }
+
         ClearSelection();
         ClearBuildingSelection();
         _selectedBuilding = building;
@@ -2164,11 +2329,157 @@ public partial class SkirmishSandbox : Node3D
         {
             if (child is BuildingEntity building &&
                 IsInstanceValid(building) &&
+                !building.IsQueuedForDeletion() &&
                 building.IsAlive)
             {
                 yield return building;
             }
         }
+    }
+
+    public BuildingEntity GetHeadquarters(UnitTeam team)
+    {
+        BuildingEntity headquarters = team == UnitTeam.Friendly
+            ? _friendlyHeadquarters
+            : _enemyHeadquarters;
+        return IsSupportedTeam(team) && IsHeadquartersAlive(headquarters)
+            ? headquarters
+            : null!;
+    }
+
+    public IReadOnlyList<SelectableUnit> GetLivingWorkers(UnitTeam team)
+    {
+        List<SelectableUnit> workers = new();
+        if (!IsSupportedTeam(team))
+        {
+            return workers;
+        }
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(team))
+        {
+            if (unit.HasWorkerEconomy)
+            {
+                workers.Add(unit);
+            }
+        }
+
+        workers.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return workers;
+    }
+
+    public IReadOnlyList<SelectableUnit> GetLivingCombatUnits(UnitTeam team)
+    {
+        List<SelectableUnit> combatUnits = new();
+        if (!IsSupportedTeam(team))
+        {
+            return combatUnits;
+        }
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(team))
+        {
+            if (unit.CanAttack)
+            {
+                combatUnits.Add(unit);
+            }
+        }
+
+        combatUnits.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return combatUnits;
+    }
+
+    public IReadOnlyList<BuildingEntity> GetCompletedProductionBuildings(
+        UnitTeam team)
+    {
+        List<BuildingEntity> buildings = new();
+        if (!IsSupportedTeam(team))
+        {
+            return buildings;
+        }
+
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            if (building.Team == team &&
+                building.IsComplete &&
+                building.HasProduction)
+            {
+                buildings.Add(building);
+            }
+        }
+
+        buildings.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return buildings;
+    }
+
+    public IReadOnlyList<BuildingEntity> GetCompletedResourceDropOffs(
+        UnitTeam team)
+    {
+        List<BuildingEntity> buildings = new();
+        if (!IsSupportedTeam(team))
+        {
+            return buildings;
+        }
+
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            if (building.Team == team && building.AcceptsMaterials)
+            {
+                buildings.Add(building);
+            }
+        }
+
+        buildings.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return buildings;
+    }
+
+    public IReadOnlyList<BuildingEntity> GetActiveConstructionSites(UnitTeam team)
+    {
+        List<BuildingEntity> buildings = new();
+        if (!IsSupportedTeam(team))
+        {
+            return buildings;
+        }
+
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            if (building.Team == team && !building.IsComplete)
+            {
+                buildings.Add(building);
+            }
+        }
+
+        buildings.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return buildings;
+    }
+
+    public IReadOnlyList<MaterialsResourceNode> GetAvailableMaterialsNodes()
+    {
+        List<MaterialsResourceNode> resourceNodes = new();
+        foreach (Node child in _resourceNodes.GetChildren())
+        {
+            if (child is MaterialsResourceNode resourceNode &&
+                IsInstanceValid(resourceNode) &&
+                !resourceNode.IsQueuedForDeletion() &&
+                !resourceNode.IsDepleted)
+            {
+                resourceNodes.Add(resourceNode);
+            }
+        }
+
+        resourceNodes.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        return resourceNodes;
+    }
+
+    public int GetDepositedMaterials(UnitTeam team)
+    {
+        return IsSupportedTeam(team)
+            ? _resourceLedger.GetMaterials(team)
+            : 0;
     }
 
     private void ClearSelection()

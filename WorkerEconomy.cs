@@ -79,14 +79,14 @@ public partial class WorkerEconomy : Node
         SetPhysicsProcess(true);
     }
 
-    public void BeginGathering(
+    public bool BeginGathering(
         MaterialsResourceNode resourceTarget,
         int slotIndex,
         int slotCount)
     {
         if (_isStopped || !IsValidResource(resourceTarget))
         {
-            return;
+            return false;
         }
 
         CancelTask();
@@ -99,13 +99,14 @@ public partial class WorkerEconomy : Node
         if (CarriedMaterials >= GetCarryingCapacity())
         {
             BeginReturnToDropOff();
-            return;
+            return true;
         }
 
         MoveToResource();
+        return true;
     }
 
-    public void BeginManualDropOff(
+    public bool BeginManualDropOff(
         BuildingEntity building,
         int slotIndex,
         int slotCount)
@@ -114,7 +115,7 @@ public partial class WorkerEconomy : Node
             CarriedMaterials <= 0 ||
             !IsValidDropOff(building))
         {
-            return;
+            return false;
         }
 
         CancelTask();
@@ -125,6 +126,7 @@ public partial class WorkerEconomy : Node
         _gatherTimeRemaining = 0.0f;
         _task = WorkerTask.MovingToManualDropOff;
         MoveToDropOff(building);
+        return true;
     }
 
     public bool BeginConstruction(BuildingEntity building)

@@ -32,6 +32,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
     public bool IsAlive { get; private set; } = true;
     public bool IsComplete { get; private set; }
     public float ConstructionProgress { get; private set; }
+    public int ConstructionMaterialsCost { get; internal set; }
     public bool IsSelected { get; private set; }
     public Vector3 TargetPosition => GlobalPosition;
     public float TargetRadius => Mathf.Max(Definition.FootprintRadius, 0.0f);
