@@ -87,6 +87,8 @@ public partial class SkirmishSandbox : Node3D
     private CanvasLayer _matchOutcomeOverlay = null!;
     private Label _matchOutcomeLabel = null!;
     private BuildingEntity _selectedBuilding = null!;
+    private BuildingEntity _friendlyHeadquarters = null!;
+    private BuildingEntity _enemyHeadquarters = null!;
     private MeshInstance3D _placementPreview = null!;
     private StandardMaterial3D _validPlacementMaterial = null!;
     private StandardMaterial3D _invalidPlacementMaterial = null!;
@@ -100,6 +102,8 @@ public partial class SkirmishSandbox : Node3D
     private bool _isPlacementMode;
     private bool _isPlacementValid;
     private bool _navigationRebuildQueued;
+    private bool _headquartersConfigurationValid;
+    private bool _headquartersRegistrationError;
     private int _runtimeBuildingSerial;
     private int _producedUnitSerial;
 
@@ -134,7 +138,7 @@ public partial class SkirmishSandbox : Node3D
         ResetScenarioBuildings();
         ResetScenarioResources(includeMaterialsNodes: false);
         QueueNavigationRebuild();
-        _isMatchTrackingActive = true;
+        _isMatchTrackingActive = _headquartersConfigurationValid;
         UpdateDebugOverlay();
     }
 
@@ -320,6 +324,7 @@ public partial class SkirmishSandbox : Node3D
     {
         _isReplacingScenario = true;
         _isMatchTrackingActive = false;
+        ClearRegisteredHeadquarters();
         _isMatchEnded = false;
         _matchOutcomeOverlay.Visible = false;
         _isDragging = false;
@@ -332,7 +337,7 @@ public partial class SkirmishSandbox : Node3D
     private void EndScenarioReplacement()
     {
         _isReplacingScenario = false;
-        _isMatchTrackingActive = true;
+        _isMatchTrackingActive = _headquartersConfigurationValid;
         QueueNavigationRebuild();
     }
 
@@ -613,19 +618,23 @@ public partial class SkirmishSandbox : Node3D
     private void ResetScenarioBuildings()
     {
         ClearBuildingSelection();
+        ClearRegisteredHeadquarters();
         ClearUnitContainer(_buildings);
         _runtimeBuildingSerial = 0;
         _producedUnitSerial = 0;
         SpawnBuilding(
-            "FriendlyTestBuilding",
+            "FriendlyHeadquarters",
             UnitTeam.Friendly,
             new Vector3(0.0f, 0.0f, 21.5f),
-            DropOffBuildingDefinition);
+            DropOffBuildingDefinition,
+            registerAsHeadquarters: true);
         SpawnBuilding(
-            "EnemyTestBuilding",
+            "EnemyHeadquarters",
             UnitTeam.Enemy,
             new Vector3(0.0f, 0.0f, -21.5f),
-            DropOffBuildingDefinition);
+            DropOffBuildingDefinition,
+            registerAsHeadquarters: true);
+        ValidateHeadquartersConfiguration();
     }
 
     private BuildingEntity SpawnBuilding(
@@ -633,7 +642,8 @@ public partial class SkirmishSandbox : Node3D
         UnitTeam team,
         Vector3 groundPosition,
         BuildingDefinition definition,
-        bool startsComplete = true)
+        bool startsComplete = true,
+        bool registerAsHeadquarters = false)
     {
         Vector3 dimensions = definition.PlaceholderDimensions;
         BuildingEntity building = new()
@@ -653,7 +663,89 @@ public partial class SkirmishSandbox : Node3D
         };
         building.Destroyed += HandleBuildingDestroyed;
         _buildings.AddChild(building);
+        if (registerAsHeadquarters)
+        {
+            RegisterHeadquarters(building);
+        }
+
         return building;
+    }
+
+    private void ClearRegisteredHeadquarters()
+    {
+        _friendlyHeadquarters = null!;
+        _enemyHeadquarters = null!;
+        _headquartersConfigurationValid = false;
+        _headquartersRegistrationError = false;
+    }
+
+    private void RegisterHeadquarters(BuildingEntity building)
+    {
+        if (!building.Definition.IsHeadquarters)
+        {
+            GD.PushError(
+                $"Scenario building '{building.Name}' was registered as the " +
+                "headquarters, but its BuildingDefinition is not designated " +
+                "as a headquarters.");
+            _headquartersRegistrationError = true;
+            return;
+        }
+
+        BuildingEntity existing = building.Team == UnitTeam.Friendly
+            ? _friendlyHeadquarters
+            : _enemyHeadquarters;
+        if (IsInstanceValid(existing))
+        {
+            GD.PushError(
+                $"Scenario contains more than one {building.Team} headquarters: " +
+                $"'{existing.Name}' and '{building.Name}'.");
+            _headquartersRegistrationError = true;
+            return;
+        }
+
+        if (building.Team == UnitTeam.Friendly)
+        {
+            _friendlyHeadquarters = building;
+        }
+        else
+        {
+            _enemyHeadquarters = building;
+        }
+    }
+
+    private void ValidateHeadquartersConfiguration()
+    {
+        bool hasFriendlyHeadquarters = IsRegisteredHeadquarters(
+            _friendlyHeadquarters,
+            UnitTeam.Friendly);
+        bool hasEnemyHeadquarters = IsRegisteredHeadquarters(
+            _enemyHeadquarters,
+            UnitTeam.Enemy);
+
+        if (!hasFriendlyHeadquarters)
+        {
+            GD.PushError("Scenario must contain exactly one blue headquarters.");
+        }
+
+        if (!hasEnemyHeadquarters)
+        {
+            GD.PushError("Scenario must contain exactly one red headquarters.");
+        }
+
+        _headquartersConfigurationValid =
+            !_headquartersRegistrationError &&
+            hasFriendlyHeadquarters &&
+            hasEnemyHeadquarters;
+    }
+
+    private static bool IsRegisteredHeadquarters(
+        BuildingEntity headquarters,
+        UnitTeam expectedTeam)
+    {
+        return IsInstanceValid(headquarters) &&
+            headquarters.IsAlive &&
+            headquarters.Team == expectedTeam &&
+            headquarters.Definition.IsHeadquarters;
     }
 
     private void ResetScenarioResources(bool includeMaterialsNodes)
@@ -1140,18 +1232,20 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        int livingFriendlyCount = CountLivingUnits(UnitTeam.Friendly);
-        int livingEnemyCount = CountLivingUnits(UnitTeam.Enemy);
-        if (livingFriendlyCount > 0 && livingEnemyCount > 0)
+        bool friendlyHeadquartersAlive = IsHeadquartersAlive(
+            _friendlyHeadquarters);
+        bool enemyHeadquartersAlive = IsHeadquartersAlive(
+            _enemyHeadquarters);
+        if (friendlyHeadquartersAlive && enemyHeadquartersAlive)
         {
             return;
         }
 
-        if (livingFriendlyCount == 0 && livingEnemyCount == 0)
+        if (!friendlyHeadquartersAlive && !enemyHeadquartersAlive)
         {
             EndMatch("Draw");
         }
-        else if (livingEnemyCount == 0)
+        else if (!enemyHeadquartersAlive)
         {
             EndMatch("Victory");
         }
@@ -1161,18 +1255,11 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private int CountLivingUnits(UnitTeam team)
+    private static bool IsHeadquartersAlive(BuildingEntity headquarters)
     {
-        int count = 0;
-        foreach (SelectableUnit unit in GetUnitsInGroup(CombatTargetGroups.ForTeam(team)))
-        {
-            if (unit.CanAttack)
-            {
-                count++;
-            }
-        }
-
-        return count;
+        return IsInstanceValid(headquarters) &&
+            !headquarters.IsQueuedForDeletion() &&
+            headquarters.IsAlive;
     }
 
     private void EndMatch(string outcome)
