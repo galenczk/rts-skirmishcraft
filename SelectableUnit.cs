@@ -1,13 +1,7 @@
 using Godot;
 
-public partial class SelectableUnit : MeshInstance3D
+public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 {
-    public enum UnitTeam
-    {
-        Friendly,
-        Enemy,
-    }
-
     public enum UnitActivity
     {
         Idle,
@@ -18,8 +12,6 @@ public partial class SelectableUnit : MeshInstance3D
     }
 
     public static readonly StringName FriendlySelectionGroup = "friendly_selectable_units";
-    private static readonly StringName FriendlyUnitGroup = "units_friendly";
-    private static readonly StringName EnemyUnitGroup = "units_enemy";
     private const float AttackApproachMargin = 0.2f;
 
     [Export]
@@ -32,7 +24,7 @@ public partial class SelectableUnit : MeshInstance3D
     private UnitCombat _combat = null!;
     private UnitEngagement _engagement = null!;
     private UnitPresentation _presentation = null!;
-    private SelectableUnit _combatTarget = null!;
+    private ICombatTarget _combatTarget = null!;
     private bool _isGameplayStopped;
 
     public float Health { get; private set; }
@@ -40,6 +32,8 @@ public partial class SelectableUnit : MeshInstance3D
     public bool CanAttack => Definition.CanAttack;
     public bool IsSelected { get; private set; }
     public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
+    public Vector3 TargetPosition => GlobalPosition;
+    public float TargetRadius => 0.0f;
 
     public override void _Ready()
     {
@@ -50,7 +44,7 @@ public partial class SelectableUnit : MeshInstance3D
         }
 
         Health = Mathf.Max(Definition.MaxHealth, 1.0f);
-        AddToGroup(GetUnitGroup(Team));
+        AddToGroup(CombatTargetGroups.ForTeam(Team));
 
         _presentation = new UnitPresentation { Name = "Presentation" };
         AddChild(_presentation);
@@ -127,7 +121,7 @@ public partial class SelectableUnit : MeshInstance3D
         _movement.SetMoveTarget(worldTarget, Definition.StoppingDistance);
     }
 
-    public void SetAttackTarget(SelectableUnit target)
+    public void SetAttackTarget(ICombatTarget target)
     {
         if (Team != UnitTeam.Friendly ||
             !IsAlive ||
@@ -160,16 +154,6 @@ public partial class SelectableUnit : MeshInstance3D
         {
             Die();
         }
-    }
-
-    internal static StringName GetUnitGroup(UnitTeam team)
-    {
-        return team == UnitTeam.Friendly ? FriendlyUnitGroup : EnemyUnitGroup;
-    }
-
-    internal static StringName GetEnemyUnitGroup(UnitTeam team)
-    {
-        return team == UnitTeam.Friendly ? EnemyUnitGroup : FriendlyUnitGroup;
     }
 
     internal void NotifyMovementCompleted()
@@ -209,14 +193,14 @@ public partial class SelectableUnit : MeshInstance3D
 
     private void TryBeginIdleEngagement()
     {
-        SelectableUnit target = _engagement.FindNearestEnemyWithinRange();
+        ICombatTarget target = _engagement.FindNearestEnemyWithinRange();
         if (target is not null)
         {
             BeginEngagement(target);
         }
     }
 
-    private void BeginEngagement(SelectableUnit target)
+    private void BeginEngagement(ICombatTarget target)
     {
         _combatTarget = target;
         if (IsInsideAttackPosition(target))
@@ -248,8 +232,8 @@ public partial class SelectableUnit : MeshInstance3D
         }
 
         _movement.SetMoveTarget(
-            _combatTarget.GlobalPosition,
-            GetPursuitStoppingDistance());
+            _combatTarget.TargetPosition,
+            GetPursuitStoppingDistance(_combatTarget));
     }
 
     private void UpdateAttack()
@@ -277,27 +261,27 @@ public partial class SelectableUnit : MeshInstance3D
     {
         Activity = UnitActivity.Pursuing;
         _movement.SetMoveTarget(
-            _combatTarget.GlobalPosition,
-            GetPursuitStoppingDistance());
+            _combatTarget.TargetPosition,
+            GetPursuitStoppingDistance(_combatTarget));
     }
 
-    private bool IsInsideAttackPosition(SelectableUnit target)
+    private bool IsInsideAttackPosition(ICombatTarget target)
     {
-        float stoppingDistance = GetPursuitStoppingDistance();
-        return GlobalPosition.DistanceSquaredTo(target.GlobalPosition) <=
+        float stoppingDistance = GetPursuitStoppingDistance(target);
+        return GlobalPosition.DistanceSquaredTo(target.TargetPosition) <=
             stoppingDistance * stoppingDistance;
     }
 
-    private float GetPursuitStoppingDistance()
+    private float GetPursuitStoppingDistance(ICombatTarget target)
     {
-        return Mathf.Max(Definition.AttackRange - AttackApproachMargin, 0.0f);
+        return Mathf.Max(
+            Definition.AttackRange + target.TargetRadius - AttackApproachMargin,
+            0.0f);
     }
 
-    private bool IsValidCombatTarget(SelectableUnit target)
+    private bool IsValidCombatTarget(ICombatTarget target)
     {
-        return target is not null &&
-            IsInstanceValid(target) &&
-            target.IsAlive &&
+        return CombatTargetGroups.IsValid(target) &&
             target.Team != Team;
     }
 
@@ -316,7 +300,7 @@ public partial class SelectableUnit : MeshInstance3D
         SetPhysicsProcess(false);
         _presentation.HideUnit();
         RemoveFromGroup(FriendlySelectionGroup);
-        RemoveFromGroup(GetUnitGroup(Team));
+        RemoveFromGroup(CombatTargetGroups.ForTeam(Team));
         QueueFree();
     }
 }

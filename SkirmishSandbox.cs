@@ -11,8 +11,11 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName Load250UnitScenarioAction = "debug_units_250";
     private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
     private static readonly StringName LoadMixedScenarioAction = "debug_units_mixed";
+    private static readonly StringName PlaceBuildingAction = "debug_place_building";
+    private static readonly StringName CancelPlacementAction = "ui_cancel";
     private static readonly StringName RestartMatchAction = "restart_match";
     private static readonly StringName MovementGroundGroup = "movement_ground";
+    private static readonly StringName NavigationSourceGroup = "navigation_source";
     private const float DragThresholdPixels = 6.0f;
     private const float ClickBoundsPaddingPixels = 4.0f;
     private const float GroundRayLength = 1000.0f;
@@ -24,6 +27,7 @@ public partial class SkirmishSandbox : Node3D
     private const int MixedWorkersPerTeam = 4;
     private const float MixedWorkerRowOffset = 3.0f;
     private const float DestinationSpacingTolerance = 0.001f;
+    private const float UnitPlacementRadius = 0.5f;
 
     [Export]
     public float DebugSpawnSpacing { get; set; } = 1.1f;
@@ -46,10 +50,15 @@ public partial class SkirmishSandbox : Node3D
     [Export]
     public Mesh EnemyWorkerMesh { get; set; } = null!;
 
+    [Export]
+    public BuildingDefinition TestBuildingDefinition { get; set; } = null!;
+
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
     private Node3D _friendlyUnits = null!;
     private Node3D _enemyUnits = null!;
+    private Node3D _buildings = null!;
+    private NavigationRegion3D _navigationRegion = null!;
     private Mesh _friendlyUnitMesh = null!;
     private Mesh _enemyUnitMesh = null!;
     private Transform3D[] _defaultFriendlyTransforms = null!;
@@ -60,6 +69,10 @@ public partial class SkirmishSandbox : Node3D
     private Label _debugMetrics = null!;
     private CanvasLayer _matchOutcomeOverlay = null!;
     private Label _matchOutcomeLabel = null!;
+    private BuildingEntity _selectedBuilding = null!;
+    private MeshInstance3D _placementPreview = null!;
+    private StandardMaterial3D _validPlacementMaterial = null!;
+    private StandardMaterial3D _invalidPlacementMaterial = null!;
     private Vector2 _dragStart;
     private Vector2 _dragCurrent;
     private double _debugOverlayUpdateTime;
@@ -67,12 +80,18 @@ public partial class SkirmishSandbox : Node3D
     private bool _isReplacingScenario;
     private bool _isMatchTrackingActive;
     private bool _isMatchEnded;
+    private bool _isPlacementMode;
+    private bool _isPlacementValid;
+    private bool _navigationRebuildQueued;
+    private int _runtimeBuildingSerial;
 
     public override void _Ready()
     {
         _camera = GetNode<Camera3D>("CameraRig/Camera3D");
         _friendlyUnits = GetNode<Node3D>("FriendlyUnits");
         _enemyUnits = GetNode<Node3D>("EnemyUnits");
+        _buildings = GetNode<Node3D>("Buildings");
+        _navigationRegion = GetNode<NavigationRegion3D>("NavigationRegion3D");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
         _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
         _defaultFriendlyTransforms = CaptureTransforms(_friendlyUnits);
@@ -86,12 +105,25 @@ public partial class SkirmishSandbox : Node3D
         _matchOutcomeLabel = GetNode<Label>(
             "MatchOutcomeOverlay/CenterContainer/OutcomePanel/OutcomeText");
         _matchOutcomeOverlay.Visible = false;
+        _validPlacementMaterial = BuildingEntity.CreateMaterial(
+            new Color(0.08f, 0.9f, 0.28f, 0.5f),
+            translucent: true);
+        _invalidPlacementMaterial = BuildingEntity.CreateMaterial(
+            new Color(0.95f, 0.12f, 0.08f, 0.5f),
+            translucent: true);
+        ResetScenarioBuildings();
+        QueueNavigationRebuild();
         _isMatchTrackingActive = true;
         UpdateDebugOverlay();
     }
 
     public override void _Process(double delta)
     {
+        if (_isPlacementMode)
+        {
+            UpdatePlacementPreview(GetViewport().GetMousePosition());
+        }
+
         EvaluateMatchOutcome();
 
         _debugOverlayUpdateTime += delta;
@@ -114,6 +146,25 @@ public partial class SkirmishSandbox : Node3D
                 GetViewport().SetInputAsHandled();
             }
 
+            return;
+        }
+
+        if (_isPlacementMode)
+        {
+            if (TryLoadDebugScenario(@event))
+            {
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
+            HandlePlacementInput(@event);
+            return;
+        }
+
+        if (@event.IsActionPressed(PlaceBuildingAction))
+        {
+            EnterPlacementMode();
+            GetViewport().SetInputAsHandled();
             return;
         }
 
@@ -202,7 +253,7 @@ public partial class SkirmishSandbox : Node3D
                 _friendlyUnits,
                 $"Friendly{index + 1:D3}",
                 _friendlyUnitMesh,
-                SelectableUnit.UnitTeam.Friendly,
+                UnitTeam.Friendly,
                 CombatDefinition,
                 transform);
         }
@@ -216,6 +267,7 @@ public partial class SkirmishSandbox : Node3D
             RespawnEnemies(useDefaultLayout: false);
         }
 
+        ResetScenarioBuildings();
         EndScenarioReplacement();
         UpdateDebugOverlay();
     }
@@ -228,12 +280,15 @@ public partial class SkirmishSandbox : Node3D
         _matchOutcomeOverlay.Visible = false;
         _isDragging = false;
         _selectionRectangle.Visible = false;
+        ClearBuildingSelection();
+        CancelPlacementMode();
     }
 
     private void EndScenarioReplacement()
     {
         _isReplacingScenario = false;
         _isMatchTrackingActive = true;
+        QueueNavigationRebuild();
     }
 
     private void RespawnEnemies(bool useDefaultLayout)
@@ -256,7 +311,7 @@ public partial class SkirmishSandbox : Node3D
                 _enemyUnits,
                 $"Enemy{index + 1:D3}",
                 _enemyUnitMesh,
-                SelectableUnit.UnitTeam.Enemy,
+                UnitTeam.Enemy,
                 CombatDefinition,
                 transform);
         }
@@ -275,14 +330,14 @@ public partial class SkirmishSandbox : Node3D
                 _friendlyUnits,
                 $"FriendlyCombat{index + 1:D2}",
                 _friendlyUnitMesh,
-                SelectableUnit.UnitTeam.Friendly,
+                UnitTeam.Friendly,
                 CombatDefinition,
                 _defaultFriendlyTransforms[index]);
             SpawnUnit(
                 _enemyUnits,
                 $"EnemyCombat{index + 1:D2}",
                 _enemyUnitMesh,
-                SelectableUnit.UnitTeam.Enemy,
+                UnitTeam.Enemy,
                 CombatDefinition,
                 _defaultEnemyTransforms[index]);
         }
@@ -294,7 +349,7 @@ public partial class SkirmishSandbox : Node3D
                 _friendlyUnits,
                 $"FriendlyWorker{index + 1:D2}",
                 FriendlyWorkerMesh,
-                SelectableUnit.UnitTeam.Friendly,
+                UnitTeam.Friendly,
                 WorkerDefinition,
                 new Transform3D(
                     Basis.Identity,
@@ -303,13 +358,14 @@ public partial class SkirmishSandbox : Node3D
                 _enemyUnits,
                 $"EnemyWorker{index + 1:D2}",
                 EnemyWorkerMesh,
-                SelectableUnit.UnitTeam.Enemy,
+                UnitTeam.Enemy,
                 WorkerDefinition,
                 new Transform3D(
                     Basis.Identity,
                     new Vector3(x, WorkerUnitHeight, -10.0f)));
         }
 
+        ResetScenarioBuildings();
         EndScenarioReplacement();
         UpdateDebugOverlay();
     }
@@ -327,7 +383,7 @@ public partial class SkirmishSandbox : Node3D
         Node3D container,
         string name,
         Mesh mesh,
-        SelectableUnit.UnitTeam team,
+        UnitTeam team,
         UnitDefinition definition,
         Transform3D transform)
     {
@@ -340,6 +396,56 @@ public partial class SkirmishSandbox : Node3D
             Transform = transform,
         };
         container.AddChild(unit);
+    }
+
+    private void ResetScenarioBuildings()
+    {
+        ClearBuildingSelection();
+        ClearUnitContainer(_buildings);
+        _runtimeBuildingSerial = 0;
+        SpawnBuilding(
+            "FriendlyTestBuilding",
+            UnitTeam.Friendly,
+            new Vector3(0.0f, 0.0f, 21.5f));
+        SpawnBuilding(
+            "EnemyTestBuilding",
+            UnitTeam.Enemy,
+            new Vector3(0.0f, 0.0f, -21.5f));
+    }
+
+    private BuildingEntity SpawnBuilding(
+        string name,
+        UnitTeam team,
+        Vector3 groundPosition)
+    {
+        Vector3 dimensions = TestBuildingDefinition.PlaceholderDimensions;
+        BuildingEntity building = new()
+        {
+            Name = name,
+            Team = team,
+            Definition = TestBuildingDefinition,
+            Mesh = BuildingEntity.CreatePlaceholderMesh(
+                TestBuildingDefinition,
+                team,
+                translucent: false),
+            Position = new Vector3(
+                groundPosition.X,
+                Mathf.Max(dimensions.Y * 0.5f, 0.0f),
+                groundPosition.Z),
+        };
+        building.Destroyed += HandleBuildingDestroyed;
+        _buildings.AddChild(building);
+        return building;
+    }
+
+    private void HandleBuildingDestroyed(BuildingEntity building)
+    {
+        if (_selectedBuilding == building)
+        {
+            _selectedBuilding = null!;
+        }
+
+        QueueNavigationRebuild();
     }
 
     private static Transform3D[] CaptureTransforms(Node3D units)
@@ -411,16 +517,234 @@ public partial class SkirmishSandbox : Node3D
             Mathf.Max(_playableBattlefieldSize.Y * 0.5f - 1.0f, 0.0f));
     }
 
+    private void EnterPlacementMode()
+    {
+        ClearSelection();
+        ClearBuildingSelection();
+        _isDragging = false;
+        _selectionRectangle.Visible = false;
+        _placementPreview = new MeshInstance3D
+        {
+            Name = "BuildingPlacementPreview",
+            Mesh = BuildingEntity.CreatePlaceholderMesh(
+                TestBuildingDefinition,
+                UnitTeam.Friendly,
+                translucent: true),
+            MaterialOverride = _invalidPlacementMaterial,
+            Visible = false,
+        };
+        AddChild(_placementPreview);
+        _isPlacementMode = true;
+        _isPlacementValid = false;
+        UpdatePlacementPreview(GetViewport().GetMousePosition());
+    }
+
+    private void HandlePlacementInput(InputEvent @event)
+    {
+        if (@event.IsActionPressed(CancelPlacementAction) ||
+            @event.IsActionPressed(PlaceBuildingAction) ||
+            @event.IsActionPressed(MoveUnitsAction))
+        {
+            CancelPlacementMode();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (@event is InputEventMouseButton mouseButton &&
+            mouseButton.IsActionPressed(SelectUnitsAction))
+        {
+            TryConfirmBuildingPlacement(mouseButton.Position);
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (@event is InputEventMouseButton)
+        {
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    private void UpdatePlacementPreview(Vector2 screenPosition)
+    {
+        if (!_isPlacementMode || !IsInstanceValid(_placementPreview))
+        {
+            return;
+        }
+
+        if (!TryGetGroundPosition(screenPosition, out Vector3 groundPosition))
+        {
+            _placementPreview.Visible = false;
+            _isPlacementValid = false;
+            return;
+        }
+
+        float height = Mathf.Max(
+            TestBuildingDefinition.PlaceholderDimensions.Y,
+            0.0f);
+        _placementPreview.Position = new Vector3(
+            groundPosition.X,
+            height * 0.5f,
+            groundPosition.Z);
+        _isPlacementValid = IsBuildingPlacementValid(groundPosition);
+        _placementPreview.MaterialOverride = _isPlacementValid
+            ? _validPlacementMaterial
+            : _invalidPlacementMaterial;
+        _placementPreview.Visible = true;
+    }
+
+    private void TryConfirmBuildingPlacement(Vector2 screenPosition)
+    {
+        UpdatePlacementPreview(screenPosition);
+        if (!_isPlacementValid || !IsInstanceValid(_placementPreview))
+        {
+            return;
+        }
+
+        Vector3 groundPosition = new(
+            _placementPreview.Position.X,
+            0.0f,
+            _placementPreview.Position.Z);
+        _runtimeBuildingSerial++;
+        SpawnBuilding(
+            $"FriendlyPlacedBuilding{_runtimeBuildingSerial:D3}",
+            UnitTeam.Friendly,
+            groundPosition);
+        CancelPlacementMode();
+        QueueNavigationRebuild();
+    }
+
+    private void CancelPlacementMode()
+    {
+        _isPlacementMode = false;
+        _isPlacementValid = false;
+        if (IsInstanceValid(_placementPreview))
+        {
+            _placementPreview.QueueFree();
+        }
+
+        _placementPreview = null!;
+    }
+
+    private bool IsBuildingPlacementValid(Vector3 groundPosition)
+    {
+        if (_navigationRegion.IsBaking() ||
+            NavigationServer3D.MapGetIterationId(GetWorld3D().NavigationMap) == 0)
+        {
+            return false;
+        }
+
+        Vector3 dimensions = TestBuildingDefinition.PlaceholderDimensions;
+        Vector2 halfSize = new(
+            Mathf.Max(dimensions.X * 0.5f, 0.0f),
+            Mathf.Max(dimensions.Z * 0.5f, 0.0f));
+        Vector2 placementCenter = new(groundPosition.X, groundPosition.Z);
+        Vector2 minimum = placementCenter - halfSize;
+        Vector2 maximum = placementCenter + halfSize;
+        Vector2 battlefieldMinimum = _playableBattlefieldBounds.Position;
+        Vector2 battlefieldMaximum = _playableBattlefieldBounds.End;
+        if (minimum.X < battlefieldMinimum.X ||
+            minimum.Y < battlefieldMinimum.Y ||
+            maximum.X > battlefieldMaximum.X ||
+            maximum.Y > battlefieldMaximum.Y)
+        {
+            return false;
+        }
+
+        float footprintRadius = Mathf.Max(
+            TestBuildingDefinition.FootprintRadius,
+            0.0f);
+        Vector2 candidateCenter = new(groundPosition.X, groundPosition.Z);
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            Vector2 buildingCenter = new(
+                building.GlobalPosition.X,
+                building.GlobalPosition.Z);
+            float requiredDistance = footprintRadius + building.TargetRadius;
+            if (candidateCenter.DistanceSquaredTo(buildingCenter) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
+        {
+            Vector2 unitCenter = new(unit.GlobalPosition.X, unit.GlobalPosition.Z);
+            float requiredDistance = footprintRadius + UnitPlacementRadius;
+            if (candidateCenter.DistanceSquaredTo(unitCenter) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void QueueNavigationRebuild()
+    {
+        if (_navigationRebuildQueued)
+        {
+            return;
+        }
+
+        _navigationRebuildQueued = true;
+        Callable.From(RebuildNavigationMesh).CallDeferred();
+    }
+
+    private void RebuildNavigationMesh()
+    {
+        _navigationRebuildQueued = false;
+        NavigationMesh navigationMesh = _navigationRegion.NavigationMesh;
+        navigationMesh.GeometryParsedGeometryType =
+            NavigationMesh.ParsedGeometryType.StaticColliders;
+        navigationMesh.GeometrySourceGeometryMode =
+            NavigationMesh.SourceGeometryMode.GroupsExplicit;
+        navigationMesh.GeometrySourceGroupName = NavigationSourceGroup;
+        navigationMesh.GeometryCollisionMask = GroundCollisionMask;
+        navigationMesh.AgentRadius = 0.5f;
+        navigationMesh.AgentHeight = 1.75f;
+        navigationMesh.AgentMaxClimb = 0.25f;
+        navigationMesh.FilterBakingAabb = new Aabb(
+            new Vector3(
+                _playableBattlefieldBounds.Position.X,
+                -1.0f,
+                _playableBattlefieldBounds.Position.Y),
+            new Vector3(
+                _playableBattlefieldBounds.Size.X,
+                5.0f,
+                _playableBattlefieldBounds.Size.Y));
+        _navigationRegion.BakeNavigationMesh(onThread: false);
+    }
+
     private void UpdateDebugOverlay()
     {
         PruneInvalidSelection();
+        PruneInvalidBuildingSelection();
+        int friendlyBuildingCount = 0;
+        int enemyBuildingCount = 0;
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            if (building.Team == UnitTeam.Friendly)
+            {
+                friendlyBuildingCount++;
+            }
+            else
+            {
+                enemyBuildingCount++;
+            }
+        }
+
         _debugMetrics.Text =
             $"FPS: {Engine.GetFramesPerSecond():0}\n" +
             $"Friendly: {_friendlyUnits.GetChildCount()}\n" +
             $"Enemy: {_enemyUnits.GetChildCount()}\n" +
-            $"Selected: {_selectedUnits.Count}\n\n" +
+            $"Selected units: {_selectedUnits.Count}\n" +
+            $"Buildings: {friendlyBuildingCount} blue | {enemyBuildingCount} red\n" +
+            $"Building selected: {(_selectedBuilding is null ? "no" : "yes")}\n\n" +
             "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
-            "F6 mixed combat/worker scenario";
+            "F6 mixed combat/worker scenario\n" +
+            "B place building | Esc/right-click cancel";
     }
 
     private void EvaluateMatchOutcome()
@@ -430,8 +754,8 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        int livingFriendlyCount = CountLivingUnits(SelectableUnit.UnitTeam.Friendly);
-        int livingEnemyCount = CountLivingUnits(SelectableUnit.UnitTeam.Enemy);
+        int livingFriendlyCount = CountLivingUnits(UnitTeam.Friendly);
+        int livingEnemyCount = CountLivingUnits(UnitTeam.Enemy);
         if (livingFriendlyCount > 0 && livingEnemyCount > 0)
         {
             return;
@@ -451,10 +775,10 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private int CountLivingUnits(SelectableUnit.UnitTeam team)
+    private int CountLivingUnits(UnitTeam team)
     {
         int count = 0;
-        foreach (SelectableUnit unit in GetUnitsInGroup(SelectableUnit.GetUnitGroup(team)))
+        foreach (SelectableUnit unit in GetUnitsInGroup(CombatTargetGroups.ForTeam(team)))
         {
             if (unit.CanAttack)
             {
@@ -470,12 +794,19 @@ public partial class SkirmishSandbox : Node3D
         _isMatchEnded = true;
         _isMatchTrackingActive = false;
         ClearSelection();
+        ClearBuildingSelection();
+        CancelPlacementMode();
         _isDragging = false;
         _selectionRectangle.Visible = false;
 
         foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
         {
             unit.StopGameplay();
+        }
+
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            building.StopGameplay();
         }
 
         _matchOutcomeLabel.Text = outcome;
@@ -540,22 +871,26 @@ public partial class SkirmishSandbox : Node3D
 
     private void SelectSingleUnit(Vector2 screenPosition)
     {
-        SelectableUnit closestUnit = FindUnitAtScreenPosition(
-            screenPosition,
-            SelectableUnit.UnitTeam.Friendly);
-
         ClearSelection();
-        if (closestUnit is not null)
+        ClearBuildingSelection();
+        ICombatTarget target = FindCombatTargetAtScreenPosition(screenPosition);
+        if (target is SelectableUnit unit && unit.Team == UnitTeam.Friendly)
         {
-            AddToSelection(closestUnit);
+            AddToSelection(unit);
+        }
+        else if (target is BuildingEntity building &&
+                 building.Team == UnitTeam.Friendly)
+        {
+            SelectBuilding(building);
         }
     }
 
     private void SelectUnitsInRectangle(Rect2 rectangle)
     {
         ClearSelection();
+        ClearBuildingSelection();
 
-        foreach (SelectableUnit unit in GetUnitsForTeam(SelectableUnit.UnitTeam.Friendly))
+        foreach (SelectableUnit unit in GetUnitsForTeam(UnitTeam.Friendly))
         {
             if (_camera.IsPositionBehind(unit.GlobalPosition))
             {
@@ -570,40 +905,54 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private SelectableUnit FindUnitAtScreenPosition(
-        Vector2 screenPosition,
-        SelectableUnit.UnitTeam? teamFilter)
+    private ICombatTarget FindCombatTargetAtScreenPosition(Vector2 screenPosition)
     {
-        SelectableUnit closestUnit = null!;
+        ICombatTarget closestTarget = null!;
         float closestDistanceSquared = float.MaxValue;
 
-        foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter))
+        foreach (ICombatTarget target in GetCombatTargets())
         {
-            if (!TryGetUnitScreenBounds(unit, out Rect2 screenBounds) ||
+            if (target is not Node3D targetNode ||
+                !TryGetTargetScreenBounds(target, out Rect2 screenBounds) ||
                 !screenBounds.Grow(ClickBoundsPaddingPixels).HasPoint(screenPosition))
             {
                 continue;
             }
 
             float distanceSquared = _camera.GlobalPosition.DistanceSquaredTo(
-                unit.GlobalPosition);
+                targetNode.GlobalPosition);
             if (distanceSquared < closestDistanceSquared)
             {
                 closestDistanceSquared = distanceSquared;
-                closestUnit = unit;
+                closestTarget = target;
             }
         }
 
-        return closestUnit;
+        return closestTarget;
+    }
+
+    private IEnumerable<ICombatTarget> GetCombatTargets()
+    {
+        foreach (UnitTeam team in new[] { UnitTeam.Friendly, UnitTeam.Enemy })
+        {
+            foreach (Node node in GetTree().GetNodesInGroup(
+                         CombatTargetGroups.ForTeam(team)))
+            {
+                if (node is ICombatTarget target && CombatTargetGroups.IsValid(target))
+                {
+                    yield return target;
+                }
+            }
+        }
     }
 
     private IEnumerable<SelectableUnit> GetUnitsForTeam(
-        SelectableUnit.UnitTeam? teamFilter)
+        UnitTeam? teamFilter)
     {
         if (teamFilter.HasValue)
         {
             foreach (SelectableUnit unit in GetUnitsInGroup(
-                SelectableUnit.GetUnitGroup(teamFilter.Value)))
+                CombatTargetGroups.ForTeam(teamFilter.Value)))
             {
                 yield return unit;
             }
@@ -612,13 +961,13 @@ public partial class SkirmishSandbox : Node3D
         }
 
         foreach (SelectableUnit unit in GetUnitsInGroup(
-            SelectableUnit.GetUnitGroup(SelectableUnit.UnitTeam.Friendly)))
+            CombatTargetGroups.ForTeam(UnitTeam.Friendly)))
         {
             yield return unit;
         }
 
         foreach (SelectableUnit unit in GetUnitsInGroup(
-            SelectableUnit.GetUnitGroup(SelectableUnit.UnitTeam.Enemy)))
+            CombatTargetGroups.ForTeam(UnitTeam.Enemy)))
         {
             yield return unit;
         }
@@ -637,14 +986,12 @@ public partial class SkirmishSandbox : Node3D
 
     private void HandleContextCommand(Vector2 screenPosition)
     {
-        SelectableUnit clickedUnit = FindUnitAtScreenPosition(
-            screenPosition,
-            teamFilter: null);
-        if (clickedUnit is not null)
+        ICombatTarget clickedTarget = FindCombatTargetAtScreenPosition(screenPosition);
+        if (clickedTarget is not null)
         {
-            if (clickedUnit.Team == SelectableUnit.UnitTeam.Enemy)
+            if (clickedTarget.Team == UnitTeam.Enemy)
             {
-                IssueAttackOrder(clickedUnit);
+                IssueAttackOrder(clickedTarget);
             }
 
             return;
@@ -653,7 +1000,7 @@ public partial class SkirmishSandbox : Node3D
         TryIssueMoveOrder(screenPosition);
     }
 
-    private void IssueAttackOrder(SelectableUnit target)
+    private void IssueAttackOrder(ICombatTarget target)
     {
         PruneInvalidSelection();
         foreach (SelectableUnit unit in _selectedUnits)
@@ -673,18 +1020,7 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        Vector3 rayOrigin = _camera.ProjectRayOrigin(screenPosition);
-        Vector3 rayEnd = rayOrigin +
-            _camera.ProjectRayNormal(screenPosition) * GroundRayLength;
-        PhysicsRayQueryParameters3D query = PhysicsRayQueryParameters3D.Create(
-            rayOrigin,
-            rayEnd,
-            GroundCollisionMask);
-        Godot.Collections.Dictionary hit = GetWorld3D().DirectSpaceState.IntersectRay(query);
-
-        if (hit.Count == 0 ||
-            hit["collider"].AsGodotObject() is not Node collider ||
-            !collider.IsInGroup(MovementGroundGroup))
+        if (!TryGetGroundPosition(screenPosition, out Vector3 commandDestination))
         {
             return;
         }
@@ -695,7 +1031,6 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
-        Vector3 commandDestination = hit["position"].AsVector3();
         if (_selectedUnits.Count == 1)
         {
             Vector3 navigationDestination = NavigationServer3D.MapGetClosestPoint(
@@ -730,6 +1065,31 @@ public partial class SkirmishSandbox : Node3D
         {
             _selectedUnits[index].SetMoveTarget(navigationDestinations[index]);
         }
+    }
+
+    private bool TryGetGroundPosition(
+        Vector2 screenPosition,
+        out Vector3 groundPosition)
+    {
+        Vector3 rayOrigin = _camera.ProjectRayOrigin(screenPosition);
+        Vector3 rayEnd = rayOrigin +
+            _camera.ProjectRayNormal(screenPosition) * GroundRayLength;
+        PhysicsRayQueryParameters3D query = PhysicsRayQueryParameters3D.Create(
+            rayOrigin,
+            rayEnd,
+            GroundCollisionMask);
+        Godot.Collections.Dictionary hit = GetWorld3D().DirectSpaceState.IntersectRay(query);
+
+        if (hit.Count == 0 ||
+            hit["collider"].AsGodotObject() is not Node collider ||
+            !collider.IsInGroup(MovementGroundGroup))
+        {
+            groundPosition = Vector3.Zero;
+            return false;
+        }
+
+        groundPosition = hit["position"].AsVector3();
+        return true;
     }
 
     private static List<Vector2> CalculateHorizontalOffsets(
@@ -1083,10 +1443,15 @@ public partial class SkirmishSandbox : Node3D
         return centroid / positions.Count;
     }
 
-    private bool TryGetUnitScreenBounds(SelectableUnit unit, out Rect2 bounds)
+    private bool TryGetTargetScreenBounds(ICombatTarget target, out Rect2 bounds)
     {
         bounds = default;
-        Aabb localBounds = unit.GetAabb();
+        if (target is not MeshInstance3D meshInstance)
+        {
+            return false;
+        }
+
+        Aabb localBounds = meshInstance.GetAabb();
         Vector2 minimum = new(float.MaxValue, float.MaxValue);
         Vector2 maximum = new(float.MinValue, float.MinValue);
 
@@ -1096,7 +1461,7 @@ public partial class SkirmishSandbox : Node3D
                 (cornerIndex & 1) == 0 ? 0.0f : localBounds.Size.X,
                 (cornerIndex & 2) == 0 ? 0.0f : localBounds.Size.Y,
                 (cornerIndex & 4) == 0 ? 0.0f : localBounds.Size.Z);
-            Vector3 worldCorner = unit.ToGlobal(localCorner);
+            Vector3 worldCorner = meshInstance.ToGlobal(localCorner);
 
             if (_camera.IsPositionBehind(worldCorner))
             {
@@ -1118,8 +1483,49 @@ public partial class SkirmishSandbox : Node3D
 
     private void AddToSelection(SelectableUnit unit)
     {
+        ClearBuildingSelection();
         unit.SetSelected(true);
         _selectedUnits.Add(unit);
+    }
+
+    private void SelectBuilding(BuildingEntity building)
+    {
+        ClearSelection();
+        ClearBuildingSelection();
+        _selectedBuilding = building;
+        building.SetSelected(true);
+    }
+
+    private void ClearBuildingSelection()
+    {
+        if (IsInstanceValid(_selectedBuilding))
+        {
+            _selectedBuilding.SetSelected(false);
+        }
+
+        _selectedBuilding = null!;
+    }
+
+    private void PruneInvalidBuildingSelection()
+    {
+        if (_selectedBuilding is not null &&
+            (!IsInstanceValid(_selectedBuilding) || !_selectedBuilding.IsAlive))
+        {
+            _selectedBuilding = null!;
+        }
+    }
+
+    private IEnumerable<BuildingEntity> GetLivingBuildings()
+    {
+        foreach (Node child in _buildings.GetChildren())
+        {
+            if (child is BuildingEntity building &&
+                IsInstanceValid(building) &&
+                building.IsAlive)
+            {
+                yield return building;
+            }
+        }
     }
 
     private void ClearSelection()

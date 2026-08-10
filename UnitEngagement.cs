@@ -11,42 +11,47 @@ public partial class UnitEngagement : Node
         _definition = definition;
     }
 
-    public SelectableUnit FindNearestEnemyWithinRange()
+    public ICombatTarget FindNearestEnemyWithinRange()
     {
         if (!_definition.CanAttack)
         {
             return null!;
         }
 
-        SelectableUnit nearestTarget = null!;
-        float nearestDistanceSquared = float.MaxValue;
+        ICombatTarget nearestTarget = null!;
+        float nearestSurfaceDistance = float.MaxValue;
         float engagementRange = Mathf.Max(_definition.EngagementRange, 0.0f);
-        float engagementRangeSquared = engagementRange * engagementRange;
 
         foreach (Node node in GetTree().GetNodesInGroup(
-                     SelectableUnit.GetEnemyUnitGroup(_unit.Team)))
+                     CombatTargetGroups.ForEnemyOf(_unit.Team)))
         {
-            if (node is not SelectableUnit candidate ||
-                !IsInstanceValid(candidate) ||
-                !candidate.IsAlive)
+            if (node is not ICombatTarget candidate ||
+                !CombatTargetGroups.IsValid(candidate) ||
+                candidate.Team == _unit.Team)
             {
                 continue;
             }
 
-            float distanceSquared = _unit.GlobalPosition.DistanceSquaredTo(
-                candidate.GlobalPosition);
-            if (distanceSquared > engagementRangeSquared)
+            float centerDistance = _unit.GlobalPosition.DistanceTo(
+                candidate.TargetPosition);
+            float surfaceDistance = Mathf.Max(
+                centerDistance - candidate.TargetRadius,
+                0.0f);
+            if (surfaceDistance > engagementRange)
             {
                 continue;
             }
 
-            bool isCloser = distanceSquared < nearestDistanceSquared;
-            bool winsTie = Mathf.IsEqualApprox(distanceSquared, nearestDistanceSquared) &&
-                (nearestTarget is null || candidate.GetInstanceId() < nearestTarget.GetInstanceId());
+            bool isCloser = surfaceDistance < nearestSurfaceDistance;
+            bool winsTie = Mathf.IsEqualApprox(
+                    surfaceDistance,
+                    nearestSurfaceDistance) &&
+                (nearestTarget is null || node.GetInstanceId() <
+                    ((Node)nearestTarget).GetInstanceId());
             if (isCloser || winsTie)
             {
                 nearestTarget = candidate;
-                nearestDistanceSquared = distanceSquared;
+                nearestSurfaceDistance = surfaceDistance;
             }
         }
 

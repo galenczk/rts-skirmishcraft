@@ -20,6 +20,9 @@ Do not treat results from one machine as generally representative. Record the Go
 - `F4`: respawn 250 friendly units.
 - `F5`: respawn 500 friendly units.
 - `F6`: load the mixed-role scenario with eight combat units and four workers per team.
+- `B`: enter developer building-placement mode.
+- Left click while placing: confirm a valid green placement.
+- Right click or `Escape` while placing: cancel without issuing a command.
 
 Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role-behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units.
 

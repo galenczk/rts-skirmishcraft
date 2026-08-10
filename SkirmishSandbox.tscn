@@ -5,6 +5,7 @@
 [ext_resource type="Script" uid="uid://dxro07ijqa7fx" path="res://SelectableUnit.cs" id="3_selectable"]
 [ext_resource type="Resource" path="res://CombatUnitDefinition.tres" id="4_unit_definition"]
 [ext_resource type="Resource" path="res://WorkerUnitDefinition.tres" id="5_worker_definition"]
+[ext_resource type="Resource" path="res://TestBuildingDefinition.tres" id="6_building_definition"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
 bg_color = Color(0.12, 0.45, 1, 0.18)
@@ -83,6 +84,7 @@ CombatDefinition = ExtResource("4_unit_definition")
 WorkerDefinition = ExtResource("5_worker_definition")
 FriendlyWorkerMesh = SubResource("Mesh_friendly_worker")
 EnemyWorkerMesh = SubResource("Mesh_enemy_worker")
+TestBuildingDefinition = ExtResource("6_building_definition")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1568734586]
 environment = SubResource("Environment_graybox")
@@ -122,7 +124,7 @@ layer = 20
 offset_left = 12.0
 offset_top = 12.0
 offset_right = 338.0
-offset_bottom = 154.0
+offset_bottom = 214.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 
@@ -130,7 +132,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected: 0\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed combat/worker scenario"
+text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed combat/worker scenario\nB place building | Esc/right-click cancel"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false
@@ -173,7 +175,7 @@ horizontal_alignment = 1
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
 mesh = SubResource("Mesh_ground")
 
-[node name="GroundClickSurface" type="StaticBody3D" parent="." groups=["movement_ground"]]
+[node name="GroundClickSurface" type="StaticBody3D" parent="." groups=["movement_ground", "navigation_source"]]
 position = Vector3(0, -0.1, 0)
 collision_layer = 1
 collision_mask = 0
@@ -183,6 +185,8 @@ shape = SubResource("Shape_ground")
 
 [node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
 navigation_mesh = SubResource("NavigationMesh_battlefield")
+
+[node name="Buildings" type="Node3D" parent="." groups=["navigation_source"]]
 
 [node name="FriendlyUnits" type="Node3D" parent="." unique_id=351874758]
 

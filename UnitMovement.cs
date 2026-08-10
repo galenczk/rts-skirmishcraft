@@ -72,6 +72,7 @@ public partial class UnitMovement : Node3D
 
         _moveTarget = worldTarget;
         _stoppingDistance = GetStoppingDistance(stoppingDistance);
+        AlignPathHeightToNavigationSurface();
         _navigationAgent.TargetDesiredDistance = _stoppingDistance;
         _navigationAgent.MaxSpeed = Mathf.Max(_definition.MovementSpeed, 0.0f);
         _navigationAgent.TargetPosition = worldTarget;
@@ -105,13 +106,27 @@ public partial class UnitMovement : Node3D
         {
             Name = "NavigationAgent3D",
             PathDesiredDistance = 0.2f,
-            PathHeightOffset = _unit.GetAabb().Position.Y,
             TargetDesiredDistance = _stoppingDistance,
             Radius = 0.45f,
             Height = 1.6f,
             MaxSpeed = Mathf.Max(_definition.MovementSpeed, 0.0f),
             AvoidanceEnabled = false,
         };
+    }
+
+    private void AlignPathHeightToNavigationSurface()
+    {
+        Rid navigationMap = _unit.GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        {
+            return;
+        }
+
+        Vector3 closestNavigationPoint = NavigationServer3D.MapGetClosestPoint(
+            navigationMap,
+            _unit.GlobalPosition);
+        _navigationAgent.PathHeightOffset =
+            closestNavigationPoint.Y - _unit.GlobalPosition.Y;
     }
 
     private static float GetStoppingDistance(float requestedDistance)

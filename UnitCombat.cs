@@ -27,20 +27,21 @@ public partial class UnitCombat : Node
             0.0f);
     }
 
-    public bool IsTargetInRange(SelectableUnit target)
+    public bool IsTargetInRange(ICombatTarget target)
     {
-        float attackRange = Mathf.Max(_definition.AttackRange, 0.0f);
-        return _unit.GlobalPosition.DistanceSquaredTo(target.GlobalPosition) <=
+        float attackRange = Mathf.Max(
+            _definition.AttackRange + target.TargetRadius,
+            0.0f);
+        return _unit.GlobalPosition.DistanceSquaredTo(target.TargetPosition) <=
             attackRange * attackRange;
     }
 
-    public void TryAttack(SelectableUnit target)
+    public void TryAttack(ICombatTarget target)
     {
         if (_isStopped ||
             !_definition.CanAttack ||
             _attackCooldownRemaining > 0.0f ||
-            !IsInstanceValid(target) ||
-            !target.IsAlive ||
+            !CombatTargetGroups.IsValid(target) ||
             target.Team == _unit.Team ||
             !IsTargetInRange(target))
         {
