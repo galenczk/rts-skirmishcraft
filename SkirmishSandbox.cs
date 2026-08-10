@@ -18,15 +18,16 @@ public partial class SkirmishSandbox : Node3D
     private const uint GroundCollisionMask = 1u;
     private const float DebugOverlayUpdateInterval = 0.25f;
     private const float FriendlyUnitHeight = 0.8f;
-
-    [Export]
-    public float MoveSlotSpacing { get; set; } = 1.5f;
+    private const float DestinationSpacingTolerance = 0.001f;
 
     [Export]
     public float DebugSpawnSpacing { get; set; } = 1.1f;
 
     [Export]
     public float DebugTeamCenterSeparation { get; set; } = 16.5f;
+
+    [Export]
+    public float MinimumMoveDestinationSpacing { get; set; } = 1.1f;
 
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
@@ -38,6 +39,7 @@ public partial class SkirmishSandbox : Node3D
     private UnitDefinition _enemyUnitDefinition = null!;
     private Transform3D[] _defaultFriendlyTransforms = null!;
     private Transform3D[] _defaultEnemyTransforms = null!;
+    private Rect2 _playableBattlefieldBounds;
     private Vector2 _playableBattlefieldSize;
     private Control _selectionRectangle = null!;
     private Label _debugMetrics = null!;
@@ -63,7 +65,8 @@ public partial class SkirmishSandbox : Node3D
         _enemyUnitDefinition = GetNode<SelectableUnit>("EnemyUnits/Enemy01").Definition;
         _defaultFriendlyTransforms = CaptureTransforms(_friendlyUnits);
         _defaultEnemyTransforms = CaptureTransforms(_enemyUnits);
-        _playableBattlefieldSize = GetNavigationSize();
+        _playableBattlefieldBounds = GetNavigationBounds();
+        _playableBattlefieldSize = _playableBattlefieldBounds.Size;
         ConfigureCameraBounds();
         _selectionRectangle = GetNode<Control>("SelectionOverlay/SelectionRectangle");
         _debugMetrics = GetNode<Label>("DebugOverlay/MetricsPanel/MetricsLabel");
@@ -293,7 +296,7 @@ public partial class SkirmishSandbox : Node3D
         return totalZ / transforms.Length;
     }
 
-    private Vector2 GetNavigationSize()
+    private Rect2 GetNavigationBounds()
     {
         NavigationMesh navigationMesh = GetNode<NavigationRegion3D>(
             "NavigationRegion3D").NavigationMesh;
@@ -311,7 +314,9 @@ public partial class SkirmishSandbox : Node3D
             maximumZ = Mathf.Max(maximumZ, vertex.Z);
         }
 
-        return new Vector2(maximumX - minimumX, maximumZ - minimumZ);
+        return new Rect2(
+            new Vector2(minimumX, minimumZ),
+            new Vector2(maximumX - minimumX, maximumZ - minimumZ));
     }
 
     private void ConfigureCameraBounds()
@@ -602,41 +607,391 @@ public partial class SkirmishSandbox : Node3D
         }
 
         Vector3 commandDestination = hit["position"].AsVector3();
-        float spacing = Mathf.Max(MoveSlotSpacing, 0.1f);
-
-        for (int unitIndex = 0; unitIndex < _selectedUnits.Count; unitIndex++)
+        if (_selectedUnits.Count == 1)
         {
-            SelectableUnit unit = _selectedUnits[unitIndex];
-            if (!IsInstanceValid(unit))
+            Vector3 navigationDestination = NavigationServer3D.MapGetClosestPoint(
+                navigationMap,
+                commandDestination);
+            _selectedUnits[0].SetMoveTarget(navigationDestination);
+            return;
+        }
+
+        float minimumSpacing = Mathf.Max(MinimumMoveDestinationSpacing, 0.1f);
+        List<Vector2> offsets = CalculateHorizontalOffsets(_selectedUnits);
+        if (!TryRepairMinimumSpacing(offsets, minimumSpacing, out offsets))
+        {
+            GD.PushWarning("Unable to create separated movement destinations for the selected group.");
+            return;
+        }
+
+        Vector2 requestedCentroid = new(commandDestination.X, commandDestination.Z);
+        if (!TryCreateProjectedDestinations(
+                navigationMap,
+                requestedCentroid,
+                commandDestination.Y,
+                offsets,
+                minimumSpacing,
+                out List<Vector3> navigationDestinations))
+        {
+            GD.PushWarning("Unable to fit separated movement destinations on navigable ground.");
+            return;
+        }
+
+        for (int index = 0; index < _selectedUnits.Count; index++)
+        {
+            _selectedUnits[index].SetMoveTarget(navigationDestinations[index]);
+        }
+    }
+
+    private static List<Vector2> CalculateHorizontalOffsets(
+        IReadOnlyList<SelectableUnit> units)
+    {
+        Vector2 centroid = Vector2.Zero;
+        foreach (SelectableUnit unit in units)
+        {
+            centroid += new Vector2(unit.GlobalPosition.X, unit.GlobalPosition.Z);
+        }
+
+        centroid /= units.Count;
+        List<Vector2> offsets = new(units.Count);
+        foreach (SelectableUnit unit in units)
+        {
+            offsets.Add(new Vector2(unit.GlobalPosition.X, unit.GlobalPosition.Z) - centroid);
+        }
+
+        return offsets;
+    }
+
+    private bool TryCreateProjectedDestinations(
+        Rid navigationMap,
+        Vector2 requestedCentroid,
+        float destinationHeight,
+        List<Vector2> offsets,
+        float minimumSpacing,
+        out List<Vector3> destinations)
+    {
+        destinations = ProjectDestinations(
+            navigationMap,
+            FitCentroidInsideBattlefield(requestedCentroid, offsets, minimumSpacing),
+            destinationHeight,
+            offsets);
+        if (HasMinimumSpacing(destinations, minimumSpacing))
+        {
+            return true;
+        }
+
+        Vector2 projectedCentroid = CalculateHorizontalCentroid(destinations);
+        List<Vector2> projectedOffsets = new(destinations.Count);
+        foreach (Vector3 destination in destinations)
+        {
+            projectedOffsets.Add(
+                new Vector2(destination.X, destination.Z) - projectedCentroid);
+        }
+
+        if (!TryRepairMinimumSpacing(
+                projectedOffsets,
+                minimumSpacing,
+                out projectedOffsets))
+        {
+            return false;
+        }
+
+        destinations = ProjectDestinations(
+            navigationMap,
+            FitCentroidInsideBattlefield(
+                projectedCentroid,
+                projectedOffsets,
+                minimumSpacing),
+            destinationHeight,
+            projectedOffsets);
+        return HasMinimumSpacing(destinations, minimumSpacing);
+    }
+
+    private List<Vector3> ProjectDestinations(
+        Rid navigationMap,
+        Vector2 centroid,
+        float destinationHeight,
+        IReadOnlyList<Vector2> offsets)
+    {
+        List<Vector3> destinations = new(offsets.Count);
+        foreach (Vector2 offset in offsets)
+        {
+            Vector2 horizontalDestination = centroid + offset;
+            destinations.Add(NavigationServer3D.MapGetClosestPoint(
+                navigationMap,
+                new Vector3(
+                    horizontalDestination.X,
+                    destinationHeight,
+                    horizontalDestination.Y)));
+        }
+
+        return destinations;
+    }
+
+    private Vector2 FitCentroidInsideBattlefield(
+        Vector2 requestedCentroid,
+        IReadOnlyList<Vector2> offsets,
+        float minimumSpacing)
+    {
+        GetOffsetBounds(offsets, out Vector2 minimumOffset, out Vector2 maximumOffset);
+        Vector2 footprintSize = maximumOffset - minimumOffset;
+        float preferredMargin = minimumSpacing * 0.5f;
+        Vector2 availableMargin = new(
+            Mathf.Max((_playableBattlefieldBounds.Size.X - footprintSize.X) * 0.5f, 0.0f),
+            Mathf.Max((_playableBattlefieldBounds.Size.Y - footprintSize.Y) * 0.5f, 0.0f));
+        Vector2 margin = new(
+            Mathf.Min(preferredMargin, availableMargin.X),
+            Mathf.Min(preferredMargin, availableMargin.Y));
+        Vector2 minimumCentroid = _playableBattlefieldBounds.Position +
+            margin - minimumOffset;
+        Vector2 maximumCentroid = _playableBattlefieldBounds.End -
+            margin - maximumOffset;
+
+        return new Vector2(
+            Mathf.Clamp(requestedCentroid.X, minimumCentroid.X, maximumCentroid.X),
+            Mathf.Clamp(requestedCentroid.Y, minimumCentroid.Y, maximumCentroid.Y));
+    }
+
+    private static void GetOffsetBounds(
+        IReadOnlyList<Vector2> offsets,
+        out Vector2 minimum,
+        out Vector2 maximum)
+    {
+        minimum = new Vector2(float.MaxValue, float.MaxValue);
+        maximum = new Vector2(float.MinValue, float.MinValue);
+        foreach (Vector2 offset in offsets)
+        {
+            minimum = new Vector2(
+                Mathf.Min(minimum.X, offset.X),
+                Mathf.Min(minimum.Y, offset.Y));
+            maximum = new Vector2(
+                Mathf.Max(maximum.X, offset.X),
+                Mathf.Max(maximum.Y, offset.Y));
+        }
+    }
+
+    private static bool TryRepairMinimumSpacing(
+        IReadOnlyList<Vector2> intendedOffsets,
+        float minimumSpacing,
+        out List<Vector2> repairedOffsets)
+    {
+        int count = intendedOffsets.Count;
+        bool[] needsRepair = new bool[count];
+        float effectiveMinimumSpacing = Mathf.Max(
+            minimumSpacing - DestinationSpacingTolerance,
+            0.0f);
+        float minimumSpacingSquared = effectiveMinimumSpacing * effectiveMinimumSpacing;
+        bool repairNeeded = false;
+
+        for (int firstIndex = 0; firstIndex < count; firstIndex++)
+        {
+            for (int secondIndex = firstIndex + 1; secondIndex < count; secondIndex++)
+            {
+                if (intendedOffsets[firstIndex].DistanceSquaredTo(
+                        intendedOffsets[secondIndex]) >= minimumSpacingSquared)
+                {
+                    continue;
+                }
+
+                needsRepair[firstIndex] = true;
+                needsRepair[secondIndex] = true;
+                repairNeeded = true;
+            }
+        }
+
+        repairedOffsets = new List<Vector2>(intendedOffsets);
+        if (!repairNeeded)
+        {
+            return true;
+        }
+
+        Dictionary<Vector2I, List<Vector2>> occupiedCells = new();
+        bool[] assigned = new bool[count];
+        for (int index = 0; index < count; index++)
+        {
+            if (needsRepair[index])
             {
                 continue;
             }
 
-            Vector3 requestedDestination = commandDestination +
-                GetMoveSlotOffset(unitIndex, _selectedUnits.Count, spacing);
-            Vector3 navigationDestination = NavigationServer3D.MapGetClosestPoint(
-                navigationMap,
-                requestedDestination);
-            unit.SetMoveTarget(navigationDestination);
+            AddOccupiedPosition(occupiedCells, intendedOffsets[index], minimumSpacing);
+            assigned[index] = true;
         }
+
+        for (int index = 0; index < count; index++)
+        {
+            if (assigned[index])
+            {
+                continue;
+            }
+
+            Vector2 intended = intendedOffsets[index];
+            if (IsPositionAvailable(
+                    occupiedCells,
+                    intended,
+                    minimumSpacing,
+                    minimumSpacingSquared))
+            {
+                repairedOffsets[index] = intended;
+                AddOccupiedPosition(occupiedCells, intended, minimumSpacing);
+                continue;
+            }
+
+            bool positionFound = false;
+            for (int ring = 1; ring <= count && !positionFound; ring++)
+            {
+                for (int x = -ring; x <= ring && !positionFound; x++)
+                {
+                    for (int z = -ring; z <= ring; z++)
+                    {
+                        if (Mathf.Max(Mathf.Abs(x), Mathf.Abs(z)) != ring)
+                        {
+                            continue;
+                        }
+
+                        Vector2 candidate = intended +
+                            new Vector2(x * minimumSpacing, z * minimumSpacing);
+                        if (!IsPositionAvailable(
+                                occupiedCells,
+                                candidate,
+                                minimumSpacing,
+                                minimumSpacingSquared))
+                        {
+                            continue;
+                        }
+
+                        repairedOffsets[index] = candidate;
+                        AddOccupiedPosition(occupiedCells, candidate, minimumSpacing);
+                        positionFound = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!positionFound)
+            {
+                return false;
+            }
+        }
+
+        Vector2 intendedCentroid = CalculateHorizontalCentroid(intendedOffsets);
+        Vector2 repairedCentroid = CalculateHorizontalCentroid(repairedOffsets);
+        Vector2 recenterOffset = intendedCentroid - repairedCentroid;
+        for (int index = 0; index < repairedOffsets.Count; index++)
+        {
+            repairedOffsets[index] += recenterOffset;
+        }
+
+        return true;
     }
 
-    private static Vector3 GetMoveSlotOffset(int index, int count, float spacing)
+    private static bool IsPositionAvailable(
+        IReadOnlyDictionary<Vector2I, List<Vector2>> occupiedCells,
+        Vector2 position,
+        float cellSize,
+        float minimumSpacingSquared)
     {
-        if (count <= 1)
+        Vector2I cell = GetSpacingCell(position, cellSize);
+        for (int xOffset = -1; xOffset <= 1; xOffset++)
         {
-            return Vector3.Zero;
+            for (int yOffset = -1; yOffset <= 1; yOffset++)
+            {
+                Vector2I neighboringCell = cell + new Vector2I(xOffset, yOffset);
+                if (!occupiedCells.TryGetValue(
+                        neighboringCell,
+                        out List<Vector2> occupiedPositions))
+                {
+                    continue;
+                }
+
+                foreach (Vector2 occupiedPosition in occupiedPositions)
+                {
+                    if (position.DistanceSquaredTo(occupiedPosition) <
+                        minimumSpacingSquared)
+                    {
+                        return false;
+                    }
+                }
+            }
         }
 
-        int columns = Mathf.CeilToInt(Mathf.Sqrt(count));
-        int rows = Mathf.CeilToInt((float)count / columns);
-        int row = index / columns;
-        int column = index % columns;
-        int unitsInRow = Mathf.Min(columns, count - row * columns);
+        return true;
+    }
 
-        float xOffset = column * spacing - (unitsInRow - 1) * spacing * 0.5f;
-        float zOffset = row * spacing - (rows - 1) * spacing * 0.5f;
-        return new Vector3(xOffset, 0.0f, zOffset);
+    private static void AddOccupiedPosition(
+        IDictionary<Vector2I, List<Vector2>> occupiedCells,
+        Vector2 position,
+        float cellSize)
+    {
+        Vector2I cell = GetSpacingCell(position, cellSize);
+        if (!occupiedCells.TryGetValue(cell, out List<Vector2> occupiedPositions))
+        {
+            occupiedPositions = new List<Vector2>();
+            occupiedCells[cell] = occupiedPositions;
+        }
+
+        occupiedPositions.Add(position);
+    }
+
+    private static Vector2I GetSpacingCell(Vector2 position, float cellSize)
+    {
+        return new Vector2I(
+            Mathf.FloorToInt(position.X / cellSize),
+            Mathf.FloorToInt(position.Y / cellSize));
+    }
+
+    private static bool HasMinimumSpacing(
+        IReadOnlyList<Vector3> destinations,
+        float minimumSpacing)
+    {
+        float effectiveMinimumSpacing = Mathf.Max(
+            minimumSpacing - DestinationSpacingTolerance,
+            0.0f);
+        float minimumSpacingSquared = effectiveMinimumSpacing * effectiveMinimumSpacing;
+        for (int firstIndex = 0; firstIndex < destinations.Count; firstIndex++)
+        {
+            Vector2 first = new(
+                destinations[firstIndex].X,
+                destinations[firstIndex].Z);
+            for (int secondIndex = firstIndex + 1;
+                 secondIndex < destinations.Count;
+                 secondIndex++)
+            {
+                Vector2 second = new(
+                    destinations[secondIndex].X,
+                    destinations[secondIndex].Z);
+                if (first.DistanceSquaredTo(second) < minimumSpacingSquared)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static Vector2 CalculateHorizontalCentroid(
+        IReadOnlyList<Vector2> positions)
+    {
+        Vector2 centroid = Vector2.Zero;
+        foreach (Vector2 position in positions)
+        {
+            centroid += position;
+        }
+
+        return centroid / positions.Count;
+    }
+
+    private static Vector2 CalculateHorizontalCentroid(
+        IReadOnlyList<Vector3> positions)
+    {
+        Vector2 centroid = Vector2.Zero;
+        foreach (Vector3 position in positions)
+        {
+            centroid += new Vector2(position.X, position.Z);
+        }
+
+        return centroid / positions.Count;
     }
 
     private bool TryGetUnitScreenBounds(SelectableUnit unit, out Rect2 bounds)
