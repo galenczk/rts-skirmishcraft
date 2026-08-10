@@ -6,6 +6,8 @@
 [ext_resource type="Resource" path="res://CombatUnitDefinition.tres" id="4_unit_definition"]
 [ext_resource type="Resource" path="res://WorkerUnitDefinition.tres" id="5_worker_definition"]
 [ext_resource type="Resource" path="res://TestBuildingDefinition.tres" id="6_building_definition"]
+[ext_resource type="Script" path="res://TeamResourceLedger.cs" id="7_resource_ledger"]
+[ext_resource type="Resource" path="res://MaterialsNodeDefinition.tres" id="8_materials_definition"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
 bg_color = Color(0.12, 0.45, 1, 0.18)
@@ -85,6 +87,7 @@ WorkerDefinition = ExtResource("5_worker_definition")
 FriendlyWorkerMesh = SubResource("Mesh_friendly_worker")
 EnemyWorkerMesh = SubResource("Mesh_enemy_worker")
 TestBuildingDefinition = ExtResource("6_building_definition")
+MaterialsDefinition = ExtResource("8_materials_definition")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1568734586]
 environment = SubResource("Environment_graybox")
@@ -124,7 +127,7 @@ layer = 20
 offset_left = 12.0
 offset_top = 12.0
 offset_right = 338.0
-offset_bottom = 214.0
+offset_bottom = 232.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 
@@ -132,7 +135,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed combat/worker scenario\nB place building | Esc/right-click cancel"
+text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed roles + Materials economy\nB place building | Esc/right-click cancel"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false
@@ -185,6 +188,11 @@ shape = SubResource("Shape_ground")
 
 [node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
 navigation_mesh = SubResource("NavigationMesh_battlefield")
+
+[node name="TeamResourceLedger" type="Node" parent="."]
+script = ExtResource("7_resource_ledger")
+
+[node name="ResourceNodes" type="Node3D" parent="."]
 
 [node name="Buildings" type="Node3D" parent="." groups=["navigation_source"]]
 

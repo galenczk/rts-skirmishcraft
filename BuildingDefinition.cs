@@ -14,4 +14,7 @@ public partial class BuildingDefinition : Resource
 
     [Export]
     public Vector3 PlaceholderDimensions { get; set; } = Vector3.One;
+
+    [Export]
+    public bool AcceptsMaterials { get; set; }
 }

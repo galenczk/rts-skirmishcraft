@@ -53,11 +53,16 @@ public partial class SkirmishSandbox : Node3D
     [Export]
     public BuildingDefinition TestBuildingDefinition { get; set; } = null!;
 
+    [Export]
+    public MaterialsNodeDefinition MaterialsDefinition { get; set; } = null!;
+
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
     private Node3D _friendlyUnits = null!;
     private Node3D _enemyUnits = null!;
     private Node3D _buildings = null!;
+    private Node3D _resourceNodes = null!;
+    private TeamResourceLedger _resourceLedger = null!;
     private NavigationRegion3D _navigationRegion = null!;
     private Mesh _friendlyUnitMesh = null!;
     private Mesh _enemyUnitMesh = null!;
@@ -91,6 +96,8 @@ public partial class SkirmishSandbox : Node3D
         _friendlyUnits = GetNode<Node3D>("FriendlyUnits");
         _enemyUnits = GetNode<Node3D>("EnemyUnits");
         _buildings = GetNode<Node3D>("Buildings");
+        _resourceNodes = GetNode<Node3D>("ResourceNodes");
+        _resourceLedger = GetNode<TeamResourceLedger>("TeamResourceLedger");
         _navigationRegion = GetNode<NavigationRegion3D>("NavigationRegion3D");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
         _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
@@ -112,6 +119,7 @@ public partial class SkirmishSandbox : Node3D
             new Color(0.95f, 0.12f, 0.08f, 0.5f),
             translucent: true);
         ResetScenarioBuildings();
+        ResetScenarioResources(includeMaterialsNodes: false);
         QueueNavigationRebuild();
         _isMatchTrackingActive = true;
         UpdateDebugOverlay();
@@ -268,6 +276,7 @@ public partial class SkirmishSandbox : Node3D
         }
 
         ResetScenarioBuildings();
+        ResetScenarioResources(includeMaterialsNodes: false);
         EndScenarioReplacement();
         UpdateDebugOverlay();
     }
@@ -282,6 +291,7 @@ public partial class SkirmishSandbox : Node3D
         _selectionRectangle.Visible = false;
         ClearBuildingSelection();
         CancelPlacementMode();
+        _resourceLedger.Reset();
     }
 
     private void EndScenarioReplacement()
@@ -366,6 +376,7 @@ public partial class SkirmishSandbox : Node3D
         }
 
         ResetScenarioBuildings();
+        ResetScenarioResources(includeMaterialsNodes: true);
         EndScenarioReplacement();
         UpdateDebugOverlay();
     }
@@ -436,6 +447,35 @@ public partial class SkirmishSandbox : Node3D
         building.Destroyed += HandleBuildingDestroyed;
         _buildings.AddChild(building);
         return building;
+    }
+
+    private void ResetScenarioResources(bool includeMaterialsNodes)
+    {
+        ClearUnitContainer(_resourceNodes);
+        if (!includeMaterialsNodes)
+        {
+            return;
+        }
+
+        SpawnMaterialsNode("MaterialsNorth", new Vector2(-11.0f, 13.0f));
+        SpawnMaterialsNode("MaterialsSouth", new Vector2(11.0f, -13.0f));
+    }
+
+    private void SpawnMaterialsNode(string name, Vector2 horizontalPosition)
+    {
+        float height = Mathf.Max(
+            MaterialsDefinition.PlaceholderDimensions.Y,
+            0.0f);
+        MaterialsResourceNode resourceNode = new()
+        {
+            Name = name,
+            Definition = MaterialsDefinition,
+            Position = new Vector3(
+                horizontalPosition.X,
+                height * 0.5f,
+                horizontalPosition.Y),
+        };
+        _resourceNodes.AddChild(resourceNode);
     }
 
     private void HandleBuildingDestroyed(BuildingEntity building)
@@ -740,10 +780,11 @@ public partial class SkirmishSandbox : Node3D
             $"Friendly: {_friendlyUnits.GetChildCount()}\n" +
             $"Enemy: {_enemyUnits.GetChildCount()}\n" +
             $"Selected units: {_selectedUnits.Count}\n" +
+            $"Blue Materials: {_resourceLedger.GetMaterials(UnitTeam.Friendly)}\n" +
             $"Buildings: {friendlyBuildingCount} blue | {enemyBuildingCount} red\n" +
             $"Building selected: {(_selectedBuilding is null ? "no" : "yes")}\n\n" +
             "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
-            "F6 mixed combat/worker scenario\n" +
+            "F6 mixed roles + Materials economy\n" +
             "B place building | Esc/right-click cancel";
     }
 
@@ -986,12 +1027,25 @@ public partial class SkirmishSandbox : Node3D
 
     private void HandleContextCommand(Vector2 screenPosition)
     {
+        MaterialsResourceNode resourceTarget =
+            FindResourceAtScreenPosition(screenPosition);
+        if (resourceTarget is not null)
+        {
+            IssueGatherOrder(resourceTarget);
+            return;
+        }
+
         ICombatTarget clickedTarget = FindCombatTargetAtScreenPosition(screenPosition);
         if (clickedTarget is not null)
         {
             if (clickedTarget.Team == UnitTeam.Enemy)
             {
                 IssueAttackOrder(clickedTarget);
+            }
+            else if (clickedTarget is BuildingEntity building &&
+                     building.AcceptsMaterials)
+            {
+                IssueManualDropOffOrder(building);
             }
 
             return;
@@ -1009,6 +1063,46 @@ public partial class SkirmishSandbox : Node3D
             {
                 unit.SetAttackTarget(target);
             }
+        }
+    }
+
+    private void IssueGatherOrder(MaterialsResourceNode resourceTarget)
+    {
+        PruneInvalidSelection();
+        List<SelectableUnit> workers = new();
+        foreach (SelectableUnit unit in _selectedUnits)
+        {
+            if (IsInstanceValid(unit) && unit.HasWorkerEconomy)
+            {
+                workers.Add(unit);
+            }
+        }
+
+        workers.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        for (int index = 0; index < workers.Count; index++)
+        {
+            workers[index].SetGatherTarget(resourceTarget, index, workers.Count);
+        }
+    }
+
+    private void IssueManualDropOffOrder(BuildingEntity building)
+    {
+        PruneInvalidSelection();
+        List<SelectableUnit> workers = new();
+        foreach (SelectableUnit unit in _selectedUnits)
+        {
+            if (IsInstanceValid(unit) && unit.HasWorkerEconomy)
+            {
+                workers.Add(unit);
+            }
+        }
+
+        workers.Sort((first, second) =>
+            first.GetInstanceId().CompareTo(second.GetInstanceId()));
+        for (int index = 0; index < workers.Count; index++)
+        {
+            workers[index].SetManualDropOff(building, index, workers.Count);
         }
     }
 
@@ -1445,11 +1539,48 @@ public partial class SkirmishSandbox : Node3D
 
     private bool TryGetTargetScreenBounds(ICombatTarget target, out Rect2 bounds)
     {
-        bounds = default;
         if (target is not MeshInstance3D meshInstance)
         {
+            bounds = default;
             return false;
         }
+
+        return TryGetMeshScreenBounds(meshInstance, out bounds);
+    }
+
+    private MaterialsResourceNode FindResourceAtScreenPosition(
+        Vector2 screenPosition)
+    {
+        MaterialsResourceNode closestResource = null!;
+        float closestDistanceSquared = float.MaxValue;
+        foreach (Node node in GetTree().GetNodesInGroup(
+                     MaterialsResourceNode.ResourceNodeGroup))
+        {
+            if (node is not MaterialsResourceNode resource ||
+                !IsInstanceValid(resource) ||
+                !TryGetMeshScreenBounds(resource, out Rect2 screenBounds) ||
+                !screenBounds.Grow(ClickBoundsPaddingPixels).HasPoint(screenPosition))
+            {
+                continue;
+            }
+
+            float distanceSquared = _camera.GlobalPosition.DistanceSquaredTo(
+                resource.GlobalPosition);
+            if (distanceSquared < closestDistanceSquared)
+            {
+                closestDistanceSquared = distanceSquared;
+                closestResource = resource;
+            }
+        }
+
+        return closestResource;
+    }
+
+    private bool TryGetMeshScreenBounds(
+        MeshInstance3D meshInstance,
+        out Rect2 bounds)
+    {
+        bounds = default;
 
         Aabb localBounds = meshInstance.GetAabb();
         Vector2 minimum = new(float.MaxValue, float.MaxValue);

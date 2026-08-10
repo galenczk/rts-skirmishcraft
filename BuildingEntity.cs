@@ -26,6 +26,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
     public bool IsSelected { get; private set; }
     public Vector3 TargetPosition => GlobalPosition;
     public float TargetRadius => Mathf.Max(Definition.FootprintRadius, 0.0f);
+    public bool AcceptsMaterials => Definition.AcceptsMaterials;
 
     public override void _Ready()
     {

@@ -8,3 +8,4 @@ DisplayName = "Test Building"
 MaxHealth = 200.0
 FootprintRadius = 2.0
 PlaceholderDimensions = Vector3(2.8, 3.0, 2.8)
+AcceptsMaterials = true

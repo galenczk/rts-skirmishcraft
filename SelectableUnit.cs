@@ -23,6 +23,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     private UnitMovement _movement = null!;
     private UnitCombat _combat = null!;
     private UnitEngagement _engagement = null!;
+    private WorkerEconomy _workerEconomy = null!;
     private UnitPresentation _presentation = null!;
     private ICombatTarget _combatTarget = null!;
     private bool _isGameplayStopped;
@@ -30,6 +31,8 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     public float Health { get; private set; }
     public bool IsAlive => Activity != UnitActivity.Dead;
     public bool CanAttack => Definition.CanAttack;
+    public bool HasWorkerEconomy => _workerEconomy is not null;
+    public int CarriedMaterials => _workerEconomy?.CarriedMaterials ?? 0;
     public bool IsSelected { get; private set; }
     public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
     public Vector3 TargetPosition => GlobalPosition;
@@ -66,6 +69,13 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         _engagement = new UnitEngagement { Name = "Engagement" };
         AddChild(_engagement);
         _engagement.Initialize(this, Definition);
+
+        if (Definition.WorkerEconomy is not null)
+        {
+            _workerEconomy = new WorkerEconomy { Name = "WorkerEconomy" };
+            AddChild(_workerEconomy);
+            _workerEconomy.Initialize(this, Definition.WorkerEconomy);
+        }
     }
 
     public override void _PhysicsProcess(double delta)
@@ -116,9 +126,48 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
             return;
         }
 
+        _workerEconomy?.CancelTask();
         ClearCombatTarget();
         Activity = UnitActivity.Moving;
         _movement.SetMoveTarget(worldTarget, Definition.StoppingDistance);
+    }
+
+    public void SetGatherTarget(
+        MaterialsResourceNode target,
+        int slotIndex,
+        int slotCount)
+    {
+        if (Team != UnitTeam.Friendly ||
+            !IsAlive ||
+            _isGameplayStopped ||
+            _workerEconomy is null)
+        {
+            return;
+        }
+
+        ClearCombatTarget();
+        _movement.CancelMoveOrder();
+        Activity = UnitActivity.Idle;
+        _workerEconomy.BeginGathering(target, slotIndex, slotCount);
+    }
+
+    public void SetManualDropOff(
+        BuildingEntity building,
+        int slotIndex,
+        int slotCount)
+    {
+        if (Team != UnitTeam.Friendly ||
+            !IsAlive ||
+            _isGameplayStopped ||
+            _workerEconomy is null)
+        {
+            return;
+        }
+
+        ClearCombatTarget();
+        _movement.CancelMoveOrder();
+        Activity = UnitActivity.Idle;
+        _workerEconomy.BeginManualDropOff(building, slotIndex, slotCount);
     }
 
     public void SetAttackTarget(ICombatTarget target)
@@ -188,7 +237,33 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         ClearCombatTarget();
         _combat.Stop();
         _movement.Stop();
+        _workerEconomy?.Stop(discardCarriedMaterials: false);
         SetPhysicsProcess(false);
+    }
+
+    internal bool IsWorkerTaskMoving => _movement.IsMoving;
+
+    internal void MoveForWorkerTask(
+        Vector3 worldTarget,
+        float stoppingDistance)
+    {
+        if (!IsAlive || _isGameplayStopped)
+        {
+            return;
+        }
+
+        ClearCombatTarget();
+        Activity = UnitActivity.Moving;
+        _movement.SetMoveTarget(worldTarget, stoppingDistance);
+    }
+
+    internal void StopWorkerTaskMovement()
+    {
+        _movement.CancelMoveOrder();
+        if (Activity == UnitActivity.Moving)
+        {
+            Activity = UnitActivity.Idle;
+        }
     }
 
     private void TryBeginIdleEngagement()
@@ -297,6 +372,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         ClearCombatTarget();
         _combat.Stop();
         _movement.Stop();
+        _workerEconomy?.Stop(discardCarriedMaterials: true);
         SetPhysicsProcess(false);
         _presentation.HideUnit();
         RemoveFromGroup(FriendlySelectionGroup);

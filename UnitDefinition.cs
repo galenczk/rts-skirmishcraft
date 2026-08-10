@@ -38,4 +38,7 @@ public partial class UnitDefinition : Resource
 
     [Export]
     public float AttackCooldown { get; set; }
+
+    [Export]
+    public WorkerEconomyDefinition WorkerEconomy { get; set; } = null!;
 }
