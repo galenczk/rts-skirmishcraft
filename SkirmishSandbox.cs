@@ -10,6 +10,7 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName Load100UnitScenarioAction = "debug_units_100";
     private static readonly StringName Load250UnitScenarioAction = "debug_units_250";
     private static readonly StringName Load500UnitScenarioAction = "debug_units_500";
+    private static readonly StringName LoadMixedScenarioAction = "debug_units_mixed";
     private static readonly StringName RestartMatchAction = "restart_match";
     private static readonly StringName MovementGroundGroup = "movement_ground";
     private const float DragThresholdPixels = 6.0f;
@@ -18,6 +19,10 @@ public partial class SkirmishSandbox : Node3D
     private const uint GroundCollisionMask = 1u;
     private const float DebugOverlayUpdateInterval = 0.25f;
     private const float FriendlyUnitHeight = 0.8f;
+    private const float WorkerUnitHeight = 0.5f;
+    private const int MixedCombatUnitsPerTeam = 8;
+    private const int MixedWorkersPerTeam = 4;
+    private const float MixedWorkerRowOffset = 3.0f;
     private const float DestinationSpacingTolerance = 0.001f;
 
     [Export]
@@ -29,14 +34,24 @@ public partial class SkirmishSandbox : Node3D
     [Export]
     public float MinimumMoveDestinationSpacing { get; set; } = 1.1f;
 
+    [Export]
+    public UnitDefinition CombatDefinition { get; set; } = null!;
+
+    [Export]
+    public UnitDefinition WorkerDefinition { get; set; } = null!;
+
+    [Export]
+    public Mesh FriendlyWorkerMesh { get; set; } = null!;
+
+    [Export]
+    public Mesh EnemyWorkerMesh { get; set; } = null!;
+
     private readonly List<SelectableUnit> _selectedUnits = new();
     private Camera3D _camera = null!;
     private Node3D _friendlyUnits = null!;
     private Node3D _enemyUnits = null!;
     private Mesh _friendlyUnitMesh = null!;
     private Mesh _enemyUnitMesh = null!;
-    private UnitDefinition _friendlyUnitDefinition = null!;
-    private UnitDefinition _enemyUnitDefinition = null!;
     private Transform3D[] _defaultFriendlyTransforms = null!;
     private Transform3D[] _defaultEnemyTransforms = null!;
     private Rect2 _playableBattlefieldBounds;
@@ -60,9 +75,6 @@ public partial class SkirmishSandbox : Node3D
         _enemyUnits = GetNode<Node3D>("EnemyUnits");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
         _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
-        _friendlyUnitDefinition = GetNode<SelectableUnit>(
-            "FriendlyUnits/Friendly01").Definition;
-        _enemyUnitDefinition = GetNode<SelectableUnit>("EnemyUnits/Enemy01").Definition;
         _defaultFriendlyTransforms = CaptureTransforms(_friendlyUnits);
         _defaultEnemyTransforms = CaptureTransforms(_enemyUnits);
         _playableBattlefieldBounds = GetNavigationBounds();
@@ -159,6 +171,10 @@ public partial class SkirmishSandbox : Node3D
         {
             RespawnFriendlyUnits(500);
         }
+        else if (@event.IsActionPressed(LoadMixedScenarioAction))
+        {
+            RespawnMixedRoleScenario();
+        }
         else
         {
             return false;
@@ -172,11 +188,7 @@ public partial class SkirmishSandbox : Node3D
         BeginScenarioReplacement();
         ClearSelection();
 
-        foreach (Node child in _friendlyUnits.GetChildren())
-        {
-            _friendlyUnits.RemoveChild(child);
-            child.QueueFree();
-        }
+        ClearUnitContainer(_friendlyUnits);
 
         for (int index = 0; index < count; index++)
         {
@@ -186,14 +198,13 @@ public partial class SkirmishSandbox : Node3D
                     index,
                     count,
                     DebugTeamCenterSeparation * 0.5f);
-            SelectableUnit unit = new()
-            {
-                Name = $"Friendly{index + 1:D3}",
-                Mesh = _friendlyUnitMesh,
-                Definition = _friendlyUnitDefinition,
-                Transform = transform,
-            };
-            _friendlyUnits.AddChild(unit);
+            SpawnUnit(
+                _friendlyUnits,
+                $"Friendly{index + 1:D3}",
+                _friendlyUnitMesh,
+                SelectableUnit.UnitTeam.Friendly,
+                CombatDefinition,
+                transform);
         }
 
         if (useDefaultLayout)
@@ -227,11 +238,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void RespawnEnemies(bool useDefaultLayout)
     {
-        foreach (Node child in _enemyUnits.GetChildren())
-        {
-            _enemyUnits.RemoveChild(child);
-            child.QueueFree();
-        }
+        ClearUnitContainer(_enemyUnits);
 
         float zOffset = useDefaultLayout
             ? 0.0f
@@ -245,16 +252,94 @@ public partial class SkirmishSandbox : Node3D
                 transform.Origin.Y,
                 transform.Origin.Z + zOffset);
 
-            SelectableUnit unit = new()
-            {
-                Name = $"Enemy{index + 1:D3}",
-                Mesh = _enemyUnitMesh,
-                Team = SelectableUnit.UnitTeam.Enemy,
-                Definition = _enemyUnitDefinition,
-                Transform = transform,
-            };
-            _enemyUnits.AddChild(unit);
+            SpawnUnit(
+                _enemyUnits,
+                $"Enemy{index + 1:D3}",
+                _enemyUnitMesh,
+                SelectableUnit.UnitTeam.Enemy,
+                CombatDefinition,
+                transform);
         }
+    }
+
+    private void RespawnMixedRoleScenario()
+    {
+        BeginScenarioReplacement();
+        ClearSelection();
+        ClearUnitContainer(_friendlyUnits);
+        ClearUnitContainer(_enemyUnits);
+
+        for (int index = 0; index < MixedCombatUnitsPerTeam; index++)
+        {
+            SpawnUnit(
+                _friendlyUnits,
+                $"FriendlyCombat{index + 1:D2}",
+                _friendlyUnitMesh,
+                SelectableUnit.UnitTeam.Friendly,
+                CombatDefinition,
+                _defaultFriendlyTransforms[index]);
+            SpawnUnit(
+                _enemyUnits,
+                $"EnemyCombat{index + 1:D2}",
+                _enemyUnitMesh,
+                SelectableUnit.UnitTeam.Enemy,
+                CombatDefinition,
+                _defaultEnemyTransforms[index]);
+        }
+
+        for (int index = 0; index < MixedWorkersPerTeam; index++)
+        {
+            float x = (index - (MixedWorkersPerTeam - 1) * 0.5f) * MixedWorkerRowOffset;
+            SpawnUnit(
+                _friendlyUnits,
+                $"FriendlyWorker{index + 1:D2}",
+                FriendlyWorkerMesh,
+                SelectableUnit.UnitTeam.Friendly,
+                WorkerDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, WorkerUnitHeight, 10.0f)));
+            SpawnUnit(
+                _enemyUnits,
+                $"EnemyWorker{index + 1:D2}",
+                EnemyWorkerMesh,
+                SelectableUnit.UnitTeam.Enemy,
+                WorkerDefinition,
+                new Transform3D(
+                    Basis.Identity,
+                    new Vector3(x, WorkerUnitHeight, -10.0f)));
+        }
+
+        EndScenarioReplacement();
+        UpdateDebugOverlay();
+    }
+
+    private static void ClearUnitContainer(Node3D container)
+    {
+        foreach (Node child in container.GetChildren())
+        {
+            container.RemoveChild(child);
+            child.QueueFree();
+        }
+    }
+
+    private static void SpawnUnit(
+        Node3D container,
+        string name,
+        Mesh mesh,
+        SelectableUnit.UnitTeam team,
+        UnitDefinition definition,
+        Transform3D transform)
+    {
+        SelectableUnit unit = new()
+        {
+            Name = name,
+            Mesh = mesh,
+            Team = team,
+            Definition = definition,
+            Transform = transform,
+        };
+        container.AddChild(unit);
     }
 
     private static Transform3D[] CaptureTransforms(Node3D units)
@@ -334,7 +419,8 @@ public partial class SkirmishSandbox : Node3D
             $"Friendly: {_friendlyUnits.GetChildCount()}\n" +
             $"Enemy: {_enemyUnits.GetChildCount()}\n" +
             $"Selected: {_selectedUnits.Count}\n\n" +
-            "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500";
+            "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
+            "F6 mixed combat/worker scenario";
     }
 
     private void EvaluateMatchOutcome()
@@ -368,9 +454,12 @@ public partial class SkirmishSandbox : Node3D
     private int CountLivingUnits(SelectableUnit.UnitTeam team)
     {
         int count = 0;
-        foreach (SelectableUnit unit in GetUnitsInGroup(SelectableUnit.GetCombatGroup(team)))
+        foreach (SelectableUnit unit in GetUnitsInGroup(SelectableUnit.GetUnitGroup(team)))
         {
-            count++;
+            if (unit.CanAttack)
+            {
+                count++;
+            }
         }
 
         return count;
@@ -514,7 +603,7 @@ public partial class SkirmishSandbox : Node3D
         if (teamFilter.HasValue)
         {
             foreach (SelectableUnit unit in GetUnitsInGroup(
-                SelectableUnit.GetCombatGroup(teamFilter.Value)))
+                SelectableUnit.GetUnitGroup(teamFilter.Value)))
             {
                 yield return unit;
             }
@@ -523,13 +612,13 @@ public partial class SkirmishSandbox : Node3D
         }
 
         foreach (SelectableUnit unit in GetUnitsInGroup(
-            SelectableUnit.GetCombatGroup(SelectableUnit.UnitTeam.Friendly)))
+            SelectableUnit.GetUnitGroup(SelectableUnit.UnitTeam.Friendly)))
         {
             yield return unit;
         }
 
         foreach (SelectableUnit unit in GetUnitsInGroup(
-            SelectableUnit.GetCombatGroup(SelectableUnit.UnitTeam.Enemy)))
+            SelectableUnit.GetUnitGroup(SelectableUnit.UnitTeam.Enemy)))
         {
             yield return unit;
         }

@@ -37,6 +37,7 @@ public partial class UnitCombat : Node
     public void TryAttack(SelectableUnit target)
     {
         if (_isStopped ||
+            !_definition.CanAttack ||
             _attackCooldownRemaining > 0.0f ||
             !IsInstanceValid(target) ||
             !target.IsAlive ||

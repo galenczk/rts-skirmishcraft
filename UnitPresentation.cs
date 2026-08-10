@@ -38,7 +38,8 @@ public partial class UnitPresentation : Node3D
 
         if (showSelectionMarker)
         {
-            _selectionMarker = CreateSelectionMarker();
+            float markerHeight = unit.GetAabb().Position.Y + 0.04f;
+            _selectionMarker = CreateSelectionMarker(markerHeight);
             AddChild(_selectionMarker);
             _hasSelectionMarker = true;
         }
@@ -64,7 +65,7 @@ public partial class UnitPresentation : Node3D
         _unit.Visible = false;
     }
 
-    private static MeshInstance3D CreateSelectionMarker()
+    private static MeshInstance3D CreateSelectionMarker(float markerHeight)
     {
         StandardMaterial3D markerMaterial = new()
         {
@@ -84,7 +85,7 @@ public partial class UnitPresentation : Node3D
         return new MeshInstance3D
         {
             Name = "SelectionMarker",
-            Position = new Vector3(0.0f, -0.76f, 0.0f),
+            Position = new Vector3(0.0f, markerHeight, 0.0f),
             Mesh = markerMesh,
             Visible = false,
         };

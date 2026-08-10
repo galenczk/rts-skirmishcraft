@@ -4,10 +4,13 @@
 
 [resource]
 script = ExtResource("1_definition")
+DisplayName = "Worker"
+Role = 1
 MaxHealth = 100.0
 MovementSpeed = 4.0
 StoppingDistance = 0.3
-AttackRange = 2.5
-EngagementRange = 4.0
-AttackDamage = 20.0
-AttackCooldown = 1.0
+CanAttack = false
+AttackRange = 0.0
+EngagementRange = 0.0
+AttackDamage = 0.0
+AttackCooldown = 0.0

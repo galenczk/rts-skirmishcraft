@@ -18,8 +18,8 @@ public partial class SelectableUnit : MeshInstance3D
     }
 
     public static readonly StringName FriendlySelectionGroup = "friendly_selectable_units";
-    private static readonly StringName FriendlyCombatGroup = "combat_units_friendly";
-    private static readonly StringName EnemyCombatGroup = "combat_units_enemy";
+    private static readonly StringName FriendlyUnitGroup = "units_friendly";
+    private static readonly StringName EnemyUnitGroup = "units_enemy";
     private const float AttackApproachMargin = 0.2f;
 
     [Export]
@@ -37,6 +37,7 @@ public partial class SelectableUnit : MeshInstance3D
 
     public float Health { get; private set; }
     public bool IsAlive => Activity != UnitActivity.Dead;
+    public bool CanAttack => Definition.CanAttack;
     public bool IsSelected { get; private set; }
     public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
 
@@ -49,7 +50,7 @@ public partial class SelectableUnit : MeshInstance3D
         }
 
         Health = Mathf.Max(Definition.MaxHealth, 1.0f);
-        AddToGroup(GetCombatGroup(Team));
+        AddToGroup(GetUnitGroup(Team));
 
         _presentation = new UnitPresentation { Name = "Presentation" };
         AddChild(_presentation);
@@ -80,6 +81,11 @@ public partial class SelectableUnit : MeshInstance3D
             return;
         }
 
+        if (!CanAttack)
+        {
+            return;
+        }
+
         _combat.AdvanceCooldown(delta);
 
         switch (Activity)
@@ -98,7 +104,9 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetSelected(bool selected)
     {
-        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
+        if (Team != UnitTeam.Friendly ||
+            !IsAlive ||
+            _isGameplayStopped)
         {
             return;
         }
@@ -121,7 +129,10 @@ public partial class SelectableUnit : MeshInstance3D
 
     public void SetAttackTarget(SelectableUnit target)
     {
-        if (Team != UnitTeam.Friendly || !IsAlive || _isGameplayStopped)
+        if (Team != UnitTeam.Friendly ||
+            !IsAlive ||
+            _isGameplayStopped ||
+            !CanAttack)
         {
             return;
         }
@@ -151,14 +162,14 @@ public partial class SelectableUnit : MeshInstance3D
         }
     }
 
-    internal static StringName GetCombatGroup(UnitTeam team)
+    internal static StringName GetUnitGroup(UnitTeam team)
     {
-        return team == UnitTeam.Friendly ? FriendlyCombatGroup : EnemyCombatGroup;
+        return team == UnitTeam.Friendly ? FriendlyUnitGroup : EnemyUnitGroup;
     }
 
-    internal static StringName GetEnemyCombatGroup(UnitTeam team)
+    internal static StringName GetEnemyUnitGroup(UnitTeam team)
     {
-        return team == UnitTeam.Friendly ? EnemyCombatGroup : FriendlyCombatGroup;
+        return team == UnitTeam.Friendly ? EnemyUnitGroup : FriendlyUnitGroup;
     }
 
     internal void NotifyMovementCompleted()
@@ -305,7 +316,7 @@ public partial class SelectableUnit : MeshInstance3D
         SetPhysicsProcess(false);
         _presentation.HideUnit();
         RemoveFromGroup(FriendlySelectionGroup);
-        RemoveFromGroup(GetCombatGroup(Team));
+        RemoveFromGroup(GetUnitGroup(Team));
         QueueFree();
     }
 }

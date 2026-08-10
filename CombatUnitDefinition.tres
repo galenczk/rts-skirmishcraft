@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UnitDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://UnitDefinition.cs" id="1_definition"]
+
+[resource]
+script = ExtResource("1_definition")
+DisplayName = "Combat Unit"
+Role = 0
+MaxHealth = 100.0
+MovementSpeed = 4.0
+StoppingDistance = 0.3
+CanAttack = true
+AttackRange = 2.5
+EngagementRange = 4.0
+AttackDamage = 20.0
+AttackCooldown = 1.0

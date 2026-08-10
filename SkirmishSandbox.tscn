@@ -3,7 +3,8 @@
 [ext_resource type="Script" uid="uid://bf3lopq3l11ig" path="res://SkirmishSandbox.cs" id="1_script"]
 [ext_resource type="Script" uid="uid://quujdts64dhq" path="res://RtsCameraController.cs" id="2_camera"]
 [ext_resource type="Script" uid="uid://dxro07ijqa7fx" path="res://SelectableUnit.cs" id="3_selectable"]
-[ext_resource type="Resource" path="res://PlaceholderUnitDefinition.tres" id="4_unit_definition"]
+[ext_resource type="Resource" path="res://CombatUnitDefinition.tres" id="4_unit_definition"]
+[ext_resource type="Resource" path="res://WorkerUnitDefinition.tres" id="5_worker_definition"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_selection_rectangle"]
 bg_color = Color(0.12, 0.45, 1, 0.18)
@@ -54,6 +55,13 @@ material = SubResource("Material_friendly")
 radius = 0.45
 height = 1.6
 
+[sub_resource type="CylinderMesh" id="Mesh_friendly_worker"]
+material = SubResource("Material_friendly")
+top_radius = 0.25
+bottom_radius = 0.52
+height = 1.0
+radial_segments = 8
+
 [sub_resource type="StandardMaterial3D" id="Material_enemy"]
 albedo_color = Color(0.88, 0.16, 0.12, 1)
 roughness = 0.8
@@ -62,8 +70,19 @@ roughness = 0.8
 material = SubResource("Material_enemy")
 size = Vector3(0.9, 1.4, 0.9)
 
+[sub_resource type="CylinderMesh" id="Mesh_enemy_worker"]
+material = SubResource("Material_enemy")
+top_radius = 0.25
+bottom_radius = 0.52
+height = 1.0
+radial_segments = 8
+
 [node name="SkirmishSandbox" type="Node3D" unique_id=295832280]
 script = ExtResource("1_script")
+CombatDefinition = ExtResource("4_unit_definition")
+WorkerDefinition = ExtResource("5_worker_definition")
+FriendlyWorkerMesh = SubResource("Mesh_friendly_worker")
+EnemyWorkerMesh = SubResource("Mesh_enemy_worker")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1568734586]
 environment = SubResource("Environment_graybox")
@@ -103,7 +122,7 @@ layer = 20
 offset_left = 12.0
 offset_top = 12.0
 offset_right = 338.0
-offset_bottom = 132.0
+offset_bottom = 154.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 
@@ -111,7 +130,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected: 0\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500"
+text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected: 0\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed combat/worker scenario"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false

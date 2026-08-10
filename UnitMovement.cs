@@ -105,7 +105,7 @@ public partial class UnitMovement : Node3D
         {
             Name = "NavigationAgent3D",
             PathDesiredDistance = 0.2f,
-            PathHeightOffset = -0.8f,
+            PathHeightOffset = _unit.GetAabb().Position.Y,
             TargetDesiredDistance = _stoppingDistance,
             Radius = 0.45f,
             Height = 1.6f,

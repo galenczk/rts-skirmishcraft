@@ -3,24 +3,39 @@ using Godot;
 [GlobalClass]
 public partial class UnitDefinition : Resource
 {
-    [Export]
-    public float MaxHealth { get; set; } = 100.0f;
+    public enum UnitRole
+    {
+        Combat,
+        Worker,
+    }
 
     [Export]
-    public float MovementSpeed { get; set; } = 4.0f;
+    public string DisplayName { get; set; } = "Unit";
 
     [Export]
-    public float StoppingDistance { get; set; } = 0.3f;
+    public UnitRole Role { get; set; } = UnitRole.Combat;
 
     [Export]
-    public float AttackRange { get; set; } = 2.5f;
+    public float MaxHealth { get; set; }
 
     [Export]
-    public float EngagementRange { get; set; } = 4.0f;
+    public float MovementSpeed { get; set; }
 
     [Export]
-    public float AttackDamage { get; set; } = 20.0f;
+    public float StoppingDistance { get; set; }
 
     [Export]
-    public float AttackCooldown { get; set; } = 1.0f;
+    public bool CanAttack { get; set; }
+
+    [Export]
+    public float AttackRange { get; set; }
+
+    [Export]
+    public float EngagementRange { get; set; }
+
+    [Export]
+    public float AttackDamage { get; set; }
+
+    [Export]
+    public float AttackCooldown { get; set; }
 }

@@ -13,13 +13,18 @@ public partial class UnitEngagement : Node
 
     public SelectableUnit FindNearestEnemyWithinRange()
     {
+        if (!_definition.CanAttack)
+        {
+            return null!;
+        }
+
         SelectableUnit nearestTarget = null!;
         float nearestDistanceSquared = float.MaxValue;
         float engagementRange = Mathf.Max(_definition.EngagementRange, 0.0f);
         float engagementRangeSquared = engagementRange * engagementRange;
 
         foreach (Node node in GetTree().GetNodesInGroup(
-                     SelectableUnit.GetEnemyCombatGroup(_unit.Team)))
+                     SelectableUnit.GetEnemyUnitGroup(_unit.Team)))
         {
             if (node is not SelectableUnit candidate ||
                 !IsInstanceValid(candidate) ||

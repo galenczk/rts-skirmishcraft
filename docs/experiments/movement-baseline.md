@@ -13,13 +13,15 @@ Do not treat results from one machine as generally representative. Record the Go
 - Left click: select one friendly unit.
 - Left-click drag: box-select friendly units.
 - Right click on ground: issue a move order to selected friendly units.
+- Right click an enemy: issue an attack order to selected combat-capable units.
 - `F1`: restore the default 8-friendly/8-enemy scene layout.
 - `F2`: respawn 20 friendly units.
 - `F3`: respawn 100 friendly units.
 - `F4`: respawn 250 friendly units.
 - `F5`: respawn 500 friendly units.
+- `F6`: load the mixed-role scenario with eight combat units and four workers per team.
 
-Changing the friendly-unit preset clears selection and removes any active friendly movement orders. The eight red enemy placeholders remain stationary.
+Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role-behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units.
 
 After Phase 6, red and blue units can damage one another when they are within attack range. For a movement-only baseline, issue commands away from the red group and record the run before combat changes either unit count. Combat-enabled runs should be labeled separately rather than compared directly with pre-combat movement baselines.
 
