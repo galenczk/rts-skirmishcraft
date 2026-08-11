@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="UnitProductionDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://UnitProductionDefinition.cs" id="1_definition"]
+[ext_resource type="Resource" path="res://WorkerUnitDefinition.tres" id="2_worker_unit"]
+
+[resource]
+script = ExtResource("1_definition")
+ProducedUnitDefinition = ExtResource("2_worker_unit")
+UnitMaterialsCost = 10
+ProductionTime = 2.0
+MaximumQueueLength = 5

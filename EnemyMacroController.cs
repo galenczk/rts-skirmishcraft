@@ -22,6 +22,9 @@ public partial class EnemyMacroController : Node
     [Export(PropertyHint.Range, "1,12,1")]
     public int WaveSize { get; set; } = 4;
 
+    [Export(PropertyHint.Range, "0,12,1")]
+    public int WorkerTarget { get; set; } = 3;
+
     [Export(PropertyHint.Range, "1.0,12.0,0.5")]
     public float RallyDistance { get; set; } = 5.0f;
 
@@ -116,6 +119,8 @@ public partial class EnemyMacroController : Node
         }
 
         int workers = _sandbox.GetLivingWorkers(UnitTeam.Enemy).Count;
+        BuildingEntity headquarters = _sandbox.GetHeadquarters(UnitTeam.Enemy);
+        int queuedWorkers = GetQueuedWorkers(headquarters);
         int materials = _sandbox.GetDepositedMaterials(UnitTeam.Enemy);
         string productionStatus = "none";
         int queuedUnits = 0;
@@ -135,7 +140,8 @@ public partial class EnemyMacroController : Node
         }
 
         return $"Red macro: active | {State}\n" +
-            $"Red Materials: {materials} | Workers: {workers}\n" +
+            $"Red Materials: {materials} | Workers: {workers}+{queuedWorkers}/" +
+                $"{Mathf.Max(WorkerTarget, 0)}\n" +
             $"Red production: {productionStatus} | Queue: {queuedUnits}\n" +
             $"Assembling: {_assemblingCount}/{Mathf.Max(WaveSize, 1)}";
     }
@@ -157,6 +163,7 @@ public partial class EnemyMacroController : Node
         IReadOnlyList<MaterialsResourceNode> resources =
             _sandbox.GetAvailableMaterialsNodes();
 
+        MaintainWorkerPopulation(redHeadquarters, workers.Count);
         RefreshInfrastructure();
         if (!IsValidBuilding(_productionBuilding))
         {
@@ -189,7 +196,7 @@ public partial class EnemyMacroController : Node
     private void RefreshInfrastructure()
     {
         IReadOnlyList<BuildingEntity> completedProduction =
-            _sandbox.GetCompletedProductionBuildings(UnitTeam.Enemy);
+            _sandbox.GetCompletedCombatProductionBuildings(UnitTeam.Enemy);
         _productionBuilding = completedProduction.Count > 0
             ? completedProduction[0]
             : null!;
@@ -204,6 +211,37 @@ public partial class EnemyMacroController : Node
         {
             _rallyConfiguredBuilding = null!;
         }
+    }
+
+    private void MaintainWorkerPopulation(
+        BuildingEntity headquarters,
+        int livingWorkerCount)
+    {
+        int effectiveTarget = Mathf.Max(WorkerTarget, 0);
+        if (!IsWorkerProducingHeadquarters(headquarters) ||
+            livingWorkerCount + headquarters.Production.QueueCount >= effectiveTarget)
+        {
+            return;
+        }
+
+        _sandbox.TryQueueUnit(UnitTeam.Enemy, headquarters);
+    }
+
+    private static int GetQueuedWorkers(BuildingEntity headquarters)
+    {
+        return IsWorkerProducingHeadquarters(headquarters)
+            ? headquarters.Production.QueueCount
+            : 0;
+    }
+
+    private static bool IsWorkerProducingHeadquarters(BuildingEntity headquarters)
+    {
+        return IsValidBuilding(headquarters) &&
+            headquarters.IsComplete &&
+            headquarters.Definition.IsHeadquarters &&
+            headquarters.HasProduction &&
+            headquarters.Production.Definition.ProducedUnitDefinition
+                .WorkerEconomy is not null;
     }
 
     private void HandleMissingProduction(
@@ -378,7 +416,7 @@ public partial class EnemyMacroController : Node
 
         if (plannedUnits < effectiveWaveSize)
         {
-            _sandbox.TryQueueCombatUnit(UnitTeam.Enemy, productionBuilding);
+            _sandbox.TryQueueUnit(UnitTeam.Enemy, productionBuilding);
         }
 
         if (_activeWave.Count == 0 && assemblingUnits.Count >= effectiveWaveSize)
@@ -487,7 +525,7 @@ public partial class EnemyMacroController : Node
             Mathf.Max(ObstructionTargetRange, 0.0f));
         ICombatTarget production = FindNearestTarget(
             attacker,
-            _sandbox.GetCompletedProductionBuildings(UnitTeam.Friendly),
+            _sandbox.GetCompletedCombatProductionBuildings(UnitTeam.Friendly),
             Mathf.Max(ObstructionTargetRange, 0.0f));
         return ChooseNearer(attacker, nearest, production);
     }

@@ -15,6 +15,7 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName PlaceBuildingAction = "debug_place_building";
     private static readonly StringName CancelConstructionAction = "cancel_construction";
     private static readonly StringName QueueCombatUnitAction = "queue_combat_unit";
+    private static readonly StringName QueueWorkerAction = "queue_worker";
     private static readonly StringName CancelProductionAction = "cancel_production";
     private static readonly StringName CancelPlacementAction = "ui_cancel";
     private static readonly StringName RestartMatchAction = "restart_match";
@@ -207,7 +208,14 @@ public partial class SkirmishSandbox : Node3D
 
         if (@event.IsActionPressed(QueueCombatUnitAction))
         {
-            TryQueueUnitAtSelectedBuilding();
+            TryQueueCombatUnitAtSelectedBuilding();
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (@event.IsActionPressed(QueueWorkerAction))
+        {
+            TryQueueWorkerAtSelectedHeadquarters();
             GetViewport().SetInputAsHandled();
             return;
         }
@@ -551,9 +559,9 @@ public partial class SkirmishSandbox : Node3D
             }
 
             BuildingProduction production = building.Production;
-            Mesh unitMesh = building.Team == UnitTeam.Friendly
-                ? _friendlyUnitMesh
-                : _enemyUnitMesh;
+            UnitDefinition producedDefinition =
+                production.Definition.ProducedUnitDefinition;
+            Mesh unitMesh = GetUnitMesh(building.Team, producedDefinition);
             Node3D unitContainer = building.Team == UnitTeam.Friendly
                 ? _friendlyUnits
                 : _enemyUnits;
@@ -566,7 +574,7 @@ public partial class SkirmishSandbox : Node3D
                 $"{building.Team}Produced{_producedUnitSerial:D3}",
                 unitMesh,
                 building.Team,
-                production.Definition.ProducedUnitDefinition,
+                producedDefinition,
                 new Transform3D(
                     Basis.Identity,
                     new Vector3(
@@ -579,6 +587,20 @@ public partial class SkirmishSandbox : Node3D
                 producedUnit.SetMoveTarget(production.RallyPoint);
             }
         }
+    }
+
+    private Mesh GetUnitMesh(UnitTeam team, UnitDefinition definition)
+    {
+        if (definition.WorkerEconomy is not null)
+        {
+            return team == UnitTeam.Friendly
+                ? FriendlyWorkerMesh
+                : EnemyWorkerMesh;
+        }
+
+        return team == UnitTeam.Friendly
+            ? _friendlyUnitMesh
+            : _enemyUnitMesh;
     }
 
     private bool TryFindProductionSpawnPosition(
@@ -828,7 +850,7 @@ public partial class SkirmishSandbox : Node3D
         return true;
     }
 
-    public bool TryQueueCombatUnit(
+    public bool TryQueueUnit(
         UnitTeam team,
         BuildingEntity productionBuilding)
     {
@@ -1227,18 +1249,37 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private void TryQueueUnitAtSelectedBuilding()
+    private void TryQueueCombatUnitAtSelectedBuilding()
     {
         PruneInvalidBuildingSelection();
         if (_selectedBuilding is null ||
             _selectedBuilding.Team != UnitTeam.Friendly ||
             !_selectedBuilding.IsComplete ||
-            !_selectedBuilding.HasProduction)
+            !_selectedBuilding.HasProduction ||
+            !_selectedBuilding.Production.Definition.ProducedUnitDefinition.CanAttack)
         {
             return;
         }
 
-        TryQueueCombatUnit(UnitTeam.Friendly, _selectedBuilding);
+        TryQueueUnit(UnitTeam.Friendly, _selectedBuilding);
+        UpdateDebugOverlay();
+    }
+
+    private void TryQueueWorkerAtSelectedHeadquarters()
+    {
+        PruneInvalidBuildingSelection();
+        if (_selectedBuilding is null ||
+            _selectedBuilding.Team != UnitTeam.Friendly ||
+            !_selectedBuilding.IsComplete ||
+            !_selectedBuilding.Definition.IsHeadquarters ||
+            !_selectedBuilding.HasProduction ||
+            _selectedBuilding.Production.Definition.ProducedUnitDefinition
+                .WorkerEconomy is null)
+        {
+            return;
+        }
+
+        TryQueueUnit(UnitTeam.Friendly, _selectedBuilding);
         UpdateDebugOverlay();
     }
 
@@ -1418,7 +1459,8 @@ public partial class SkirmishSandbox : Node3D
             "LMB select/drag | RMB ground move\n" +
             "Worker + RMB resource gather | Combat + RMB enemy attack\n" +
             $"Worker selected: B build ({Mathf.Max(ProductionBuildingDefinition.MaterialsCost, 0)}) | LMB place | Esc/RMB cancel\n" +
-            "Production selected: U produce | RMB ground rally\n" +
+            "HQ selected: Q worker | Combat production: U combat unit\n" +
+            "Production selected: RMB ground rally\n" +
             $"Delete cancel selected site " +
             $"({Mathf.RoundToInt(Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f) * 100.0f)}% refund)\n" +
             "X cancel newest queue | R restart after result\n" +
@@ -1448,15 +1490,19 @@ public partial class SkirmishSandbox : Node3D
 
         BuildingProduction production = _selectedBuilding.Production;
         UnitProductionDefinition definition = production.Definition;
+        UnitDefinition producedDefinition = definition.ProducedUnitDefinition;
         string rallyStatus = production.HasRallyPoint ? "set" : "none";
         string progressStatus = production.HasCompletedUnitWaiting
             ? "waiting for spawn"
             : $"{production.ProductionProgress * 100.0f:0}%";
+        string productionCommand = producedDefinition.WorkerEconomy is not null
+            ? "Q queue worker"
+            : "U queue combat unit";
         return $"{_selectedBuilding.Definition.DisplayName}\n" +
-            $"Queue: {production.QueueCount}/" +
+            $"{producedDefinition.DisplayName} queue: {production.QueueCount}/" +
                 $"{Mathf.Max(definition.MaximumQueueLength, 1)} | " +
                 $"Progress: {progressStatus}\n" +
-            $"U produce ({Mathf.Max(definition.UnitMaterialsCost, 0)} Materials) | " +
+            $"{productionCommand} ({Mathf.Max(definition.UnitMaterialsCost, 0)} Materials) | " +
                 $"X cancel newest | Rally: {rallyStatus}";
     }
 
@@ -2472,7 +2518,7 @@ public partial class SkirmishSandbox : Node3D
         return combatUnits;
     }
 
-    public IReadOnlyList<BuildingEntity> GetCompletedProductionBuildings(
+    public IReadOnlyList<BuildingEntity> GetCompletedCombatProductionBuildings(
         UnitTeam team)
     {
         List<BuildingEntity> buildings = new();
@@ -2485,7 +2531,8 @@ public partial class SkirmishSandbox : Node3D
         {
             if (building.Team == team &&
                 building.IsComplete &&
-                building.HasProduction)
+                building.HasProduction &&
+                building.Production.Definition.ProducedUnitDefinition.CanAttack)
             {
                 buildings.Add(building);
             }
