@@ -2,7 +2,19 @@
 
 ## Status
 
-Phase 0 is approved. Phase 1 establishes a runnable graybox battlefield; it does not yet execute the first gameplay experiment.
+Phase 19 integrates the implemented systems into the default replayable MVP skirmish. Launching the project now starts the complete worker-economy, construction, production, combat, headquarters-objective, and scripted-opponent loop without a debug hotkey.
+
+## Complete MVP loop
+
+- Start with one headquarters, three workers, and two blue combat units.
+- Gather the single Materials resource.
+- Construct one combat-unit production building.
+- Produce and command the existing combat unit.
+- Defend against deterministic four-unit red waves.
+- Destroy the red headquarters to win; losing the blue headquarters causes defeat.
+- Press `R` after an outcome to reload a clean complete match.
+
+The values and enemy behavior remain provisional prototype configuration. `F1` through `F6` preserve the existing scale and subsystem test scenarios; `F7` resets the complete MVP skirmish.
 
 ## Prototype objective
 

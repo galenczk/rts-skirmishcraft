@@ -22,7 +22,7 @@ Do not treat results from one machine as generally representative. Record the Go
 - `F4`: respawn 250 friendly units.
 - `F5`: respawn 500 friendly units.
 - `F6`: load the mixed-role scenario with eight combat units and four workers per team, resetting blue to 1,000 deposited Materials.
-- `F7`: load the dedicated enemy-macro skirmish scenario. Red workers gather, construct one production building, produce four-unit waves, and attack autonomously.
+- `F7`: reset the complete MVP skirmish used at project startup. Red workers gather, construct one production building, produce four-unit waves, and attack autonomously.
 - `B`: enter production-building placement mode.
 - Building placement requires a selected blue worker and 30 deposited Materials. A confirmed site assigns the closest selected worker.
 - Left click while placing: confirm a valid green placement.
@@ -33,7 +33,7 @@ Do not treat results from one machine as generally representative. Record the Go
 - With a completed production building selected, `X` cancels the newest queued unit for a full refund.
 - With a completed production building selected, right click valid ground to set or change its rally point.
 
-Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. `F7` is the dedicated scripted enemy-macro scenario; the debug overlay reports its current state, red Materials, production status, queue, and assembling-wave count. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. The preplaced tall headquarters also serves as the Materials drop-off. Buildings placed with `B` are wider production-building construction sites; after completion they produce combat units but do not accept Materials.
+The complete MVP skirmish loads automatically when the project starts; `F7` resets it during an active match. Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. The MVP/F7 scenario enables the scripted enemy macro; the debug overlay reports its current state, red Materials, production status, queue, and assembling-wave count. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. The preplaced tall headquarters also serves as the Materials drop-off. Buildings placed with `B` are wider production-building construction sites; after completion they produce combat units but do not accept Materials.
 
 After Phase 6, red and blue units can damage one another when they are within attack range. For a movement-only baseline, issue commands away from the red group and record the run before combat changes either unit count. Combat-enabled runs should be labeled separately rather than compared directly with pre-combat movement baselines.
 

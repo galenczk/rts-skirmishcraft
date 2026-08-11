@@ -30,8 +30,8 @@ public partial class SkirmishSandbox : Node3D
     private const int MixedCombatUnitsPerTeam = 8;
     private const int MixedWorkersPerTeam = 4;
     private const float MixedWorkerRowOffset = 3.0f;
-    private const int MacroFriendlyCombatUnits = 4;
-    private const int MacroEnemyCombatUnits = 2;
+    private const int MacroFriendlyCombatUnits = 2;
+    private const int MacroEnemyCombatUnits = 0;
     private const int MacroWorkersPerTeam = 3;
     private const float DestinationSpacingTolerance = 0.001f;
     private const float UnitPlacementRadius = 0.5f;
@@ -143,11 +143,7 @@ public partial class SkirmishSandbox : Node3D
         _invalidPlacementMaterial = BuildingEntity.CreateMaterial(
             new Color(0.95f, 0.12f, 0.08f, 0.5f),
             translucent: true);
-        ResetScenarioBuildings();
-        ResetScenarioResources(includeMaterialsNodes: false);
-        QueueNavigationRebuild();
-        _isMatchTrackingActive = _headquartersConfigurationValid;
-        UpdateDebugOverlay();
+        RespawnMacroScenario();
     }
 
     public override void _Process(double delta)
@@ -1419,14 +1415,16 @@ public partial class SkirmishSandbox : Node3D
             $"Buildings: {friendlyBuildingCount} blue | {enemyBuildingCount} red\n" +
             $"Building selected: {GetSelectedBuildingStatus()}\n" +
             $"{_enemyMacroController.GetDebugSummary()}\n\n" +
-            "Unit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
-            "F6 mixed roles + Materials economy\n" +
-            "F7 enemy macro skirmish\n" +
-            $"B build production ({Mathf.Max(ProductionBuildingDefinition.MaterialsCost, 0)} Materials)\n" +
+            "LMB select/drag | RMB ground move\n" +
+            "Worker + RMB resource gather | Combat + RMB enemy attack\n" +
+            $"Worker selected: B build ({Mathf.Max(ProductionBuildingDefinition.MaterialsCost, 0)}) | LMB place | Esc/RMB cancel\n" +
+            "Production selected: U produce | RMB ground rally\n" +
             $"Delete cancel selected site " +
             $"({Mathf.RoundToInt(Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f) * 100.0f)}% refund)\n" +
-            "U queue combat unit | X cancel newest\n" +
-            "Esc/right-click cancel placement";
+            "X cancel newest queue | R restart after result\n" +
+            "WASD/arrows pan | Wheel zoom\n" +
+            "Debug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
+            "F6 economy test | F7 reset complete MVP";
     }
 
     private string GetSelectedBuildingStatus()

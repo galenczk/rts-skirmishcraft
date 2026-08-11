@@ -132,8 +132,8 @@ layer = 20
 [node name="MetricsPanel" type="PanelContainer" parent="DebugOverlay"]
 offset_left = 12.0
 offset_top = 12.0
-offset_right = 338.0
-offset_bottom = 408.0
+offset_right = 470.0
+offset_bottom = 478.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 
@@ -141,7 +141,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 8\nEnemy: 8\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\nRed macro: inactive\n\nUnit presets: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 mixed roles + Materials economy\nF7 enemy macro skirmish\nB build production (30 Materials)\nDelete cancel selected site (75% refund)\nU queue combat unit | X cancel newest\nEsc/right-click cancel placement"
+text = "FPS: 0\nFriendly: 5\nEnemy: 3\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\nRed macro: active | EstablishingEconomy\nRed Materials: 0 | Workers: 3\nRed production: none | Queue: 0\nAssembling: 0/4\n\nLMB select/drag | RMB ground move\nWorker + RMB resource gather | Combat + RMB enemy attack\nWorker selected: B build (30) | LMB place | Esc/RMB cancel\nProduction selected: U produce | RMB ground rally\nDelete cancel selected site (75% refund)\nX cancel newest queue | R restart after result\nWASD/arrows pan | Wheel zoom\nDebug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 economy test | F7 reset complete MVP"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false
