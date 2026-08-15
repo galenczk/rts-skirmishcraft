@@ -64,6 +64,29 @@ public partial class RtsCameraController : Node3D
         }
     }
 
+    public void ApplyBattlefieldView(
+        Vector2 panLimits,
+        float panSpeed,
+        float maximumZoomDistance,
+        Vector3 startingPosition,
+        float startingZoomDistance)
+    {
+        PanLimits = panLimits.Abs();
+        PanSpeed = Mathf.Max(panSpeed, 0.0f);
+        MaximumZoomDistance = Mathf.Max(
+            maximumZoomDistance,
+            MinimumZoomDistance);
+        Position = new Vector3(
+            Mathf.Clamp(startingPosition.X, -PanLimits.X, PanLimits.X),
+            startingPosition.Y,
+            Mathf.Clamp(startingPosition.Z, -PanLimits.Y, PanLimits.Y));
+        _zoomDistance = ClampZoomDistance(startingZoomDistance);
+        if (IsInstanceValid(_camera))
+        {
+            ApplyZoomDistance();
+        }
+    }
+
     private void ChangeZoom(float direction)
     {
         _zoomDistance = ClampZoomDistance(

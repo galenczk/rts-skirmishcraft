@@ -3,7 +3,7 @@ using System;
 
 public partial class BuildingEntity : MeshInstance3D, ICombatTarget
 {
-    private static readonly StringName NavigationSourceGroup = "navigation_source";
+    public static readonly StringName BuildingGroup = "living_buildings";
     private const float DamageFlashDuration = 0.12f;
     private const float InitialConstructionHealthFraction = 0.25f;
 
@@ -65,6 +65,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         }
 
         AddToGroup(CombatTargetGroups.ForTeam(Team));
+        AddToGroup(BuildingGroup);
         _baseMaterialOverride = MaterialOverride;
         _damageFlashMaterial = CreateMaterial(Colors.White, translucent: false);
         _selectionMarker = CreateSelectionMarker();
@@ -74,7 +75,7 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         UpdateConstructionPresentation();
         _navigationObstacle = CreateNavigationObstacle();
         AddChild(_navigationObstacle);
-        _navigationObstacle.AddToGroup(NavigationSourceGroup);
+        _navigationObstacle.AddToGroup(NavigationPathing.NavigationSourceGroup);
         if (Definition.Production is not null)
         {
             _production = new BuildingProduction { Name = "Production" };
@@ -222,28 +223,10 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         return true;
     }
 
-    public Vector3 GetInteractionPosition(
-        int slotIndex,
-        int slotCount,
-        float workerInteractionRange)
-    {
-        int effectiveSlotCount = Mathf.Max(slotCount, 1);
-        int effectiveSlotIndex = Mathf.PosMod(slotIndex, effectiveSlotCount);
-        float angle = Mathf.Tau * effectiveSlotIndex / effectiveSlotCount;
-        float distance = TargetRadius +
-            Mathf.Max(workerInteractionRange, 0.0f) * 0.5f;
-        return GlobalPosition + new Vector3(
-            Mathf.Cos(angle) * distance,
-            0.0f,
-            Mathf.Sin(angle) * distance);
-    }
-
     public Rect2 GetFootprintRect(Vector3? positionOverride = null)
     {
         Vector3 position = positionOverride ?? GlobalPosition;
-        Vector2 halfSize = new(
-            Mathf.Max(Definition.PlaceholderDimensions.X * 0.5f, 0.0f),
-            Mathf.Max(Definition.PlaceholderDimensions.Z * 0.5f, 0.0f));
+        Vector2 halfSize = Definition.FootprintHalfExtents;
         return new Rect2(
             new Vector2(position.X, position.Z) - halfSize,
             halfSize * 2.0f);
@@ -347,22 +330,25 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
 
     private NavigationObstacle3D CreateNavigationObstacle()
     {
-        Vector3 halfDimensions = Definition.PlaceholderDimensions * 0.5f;
+        Vector2 halfExtents = Definition.FootprintHalfExtents;
+        float halfHeight = Definition.PlaceholderDimensions.Y * 0.5f;
         return new NavigationObstacle3D
         {
             Name = "NavigationObstacle3D",
-            Position = new Vector3(0.0f, -halfDimensions.Y, 0.0f),
+            Position = new Vector3(0.0f, -halfHeight, 0.0f),
             Vertices = new Vector3[]
             {
-                new(-halfDimensions.X, 0.0f, -halfDimensions.Z),
-                new(-halfDimensions.X, 0.0f, halfDimensions.Z),
-                new(halfDimensions.X, 0.0f, halfDimensions.Z),
-                new(halfDimensions.X, 0.0f, -halfDimensions.Z),
+                // Counter-clockwise winding makes 2D avoidance push agents out.
+                new(-halfExtents.X, 0.0f, -halfExtents.Y),
+                new(halfExtents.X, 0.0f, -halfExtents.Y),
+                new(halfExtents.X, 0.0f, halfExtents.Y),
+                new(-halfExtents.X, 0.0f, halfExtents.Y),
             },
             Height = Mathf.Max(Definition.PlaceholderDimensions.Y, 0.1f),
             AffectNavigationMesh = true,
-            CarveNavigationMesh = true,
-            AvoidanceEnabled = false,
+            // Let the bake apply its agent-radius clearance around the footprint.
+            CarveNavigationMesh = false,
+            AvoidanceEnabled = true,
         };
     }
 
@@ -378,7 +364,10 @@ public partial class BuildingEntity : MeshInstance3D, ICombatTarget
         _selectionMarker.Visible = false;
         Visible = false;
         RemoveFromGroup(CombatTargetGroups.ForTeam(Team));
+        RemoveFromGroup(BuildingGroup);
         _navigationObstacle.AffectNavigationMesh = false;
+        _navigationObstacle.AvoidanceEnabled = false;
+        _navigationObstacle.RemoveFromGroup(NavigationPathing.NavigationSourceGroup);
         _production?.Stop();
         if (IsInstanceValid(_activeBuilder))
         {

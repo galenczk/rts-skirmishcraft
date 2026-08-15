@@ -5,5 +5,4 @@
 [resource]
 script = ExtResource("1_definition")
 StartingQuantity = 100
-InteractionRadius = 1.2
 PlaceholderDimensions = Vector3(1.8, 1.6, 1.8)

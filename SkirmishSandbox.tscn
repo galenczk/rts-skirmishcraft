@@ -141,7 +141,7 @@ theme_override_styles/panel = SubResource("StyleBox_debug_panel")
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.94, 0.96, 1, 1)
 theme_override_font_sizes/font_size = 14
-text = "FPS: 0\nFriendly: 5\nEnemy: 3\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\nRed macro: active | EstablishingEconomy\nRed Materials: 0 | Workers: 3\nRed production: none | Queue: 0\nAssembling: 0/4\n\nLMB select/drag | RMB ground move\nWorker + RMB resource gather | Combat + RMB enemy attack\nWorker selected: B build (30) | LMB place | Esc/RMB cancel\nProduction selected: U produce | RMB ground rally\nDelete cancel selected site (75% refund)\nX cancel newest queue | R restart after result\nWASD/arrows pan | Wheel zoom\nDebug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\nF6 economy test | F7 reset complete MVP"
+text = "FPS: 0\nFriendly: 5\nEnemy: 3\nSelected units: 0\nBlue Materials: 0\nBuildings: 1 blue | 1 red\nBuilding selected: no\nRed macro: active | EstablishingEconomy\nRed Materials: 0 | Workers: 3\nRed production: none | Queue: 0\nAssembling: 0/4\n\nLMB select/drag | RMB ground move\nWorker + RMB resource gather | Combat + RMB enemy attack\nWorker selected: B build (30) | LMB place | Esc/RMB cancel\nProduction selected: U produce | RMB ground rally\nDelete cancel selected site (75% refund)\nX cancel newest queue | R restart after result\nWASD/arrows pan | Wheel zoom\nDebug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500 large-map\nF6 economy test | F7 reset complete MVP"
 
 [node name="MatchOutcomeOverlay" type="CanvasLayer" parent="."]
 visible = false

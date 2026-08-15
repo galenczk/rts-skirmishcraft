@@ -20,13 +20,11 @@ public partial class WorkerEconomy : Node
     private MaterialsResourceNode _resourceTarget = null!;
     private BuildingEntity _dropOffTarget = null!;
     private BuildingEntity _constructionTarget = null!;
+    private Vector3 _constructionInteractionPosition;
+    private bool _hasConstructionInteractionPosition;
     private MeshInstance3D _carryingMarker = null!;
     private WorkerTask _task;
     private float _gatherTimeRemaining;
-    private int _resourceSlotIndex;
-    private int _resourceSlotCount = 1;
-    private int _dropOffSlotIndex;
-    private int _dropOffSlotCount = 1;
     private bool _isStopped;
 
     public int CarriedMaterials { get; private set; }
@@ -53,10 +51,10 @@ public partial class WorkerEconomy : Node
                 UpdateGathering(delta);
                 break;
             case WorkerTask.ReturningToDropOff:
-                UpdateMovingToDropOff(manual: false);
+                UpdateMovingToDropOff();
                 break;
             case WorkerTask.MovingToManualDropOff:
-                UpdateMovingToDropOff(manual: true);
+                UpdateMovingToDropOff();
                 break;
             case WorkerTask.MovingToConstruction:
                 UpdateMovingToConstruction();
@@ -79,10 +77,7 @@ public partial class WorkerEconomy : Node
         SetPhysicsProcess(true);
     }
 
-    public bool BeginGathering(
-        MaterialsResourceNode resourceTarget,
-        int slotIndex,
-        int slotCount)
+    public bool BeginGathering(MaterialsResourceNode resourceTarget)
     {
         if (_isStopped || !IsValidResource(resourceTarget))
         {
@@ -92,8 +87,7 @@ public partial class WorkerEconomy : Node
         CancelTask();
         _resourceTarget = resourceTarget;
         _dropOffTarget = null!;
-        _resourceSlotIndex = slotIndex;
-        _resourceSlotCount = Mathf.Max(slotCount, 1);
+        _hasConstructionInteractionPosition = false;
         _gatherTimeRemaining = 0.0f;
 
         if (CarriedMaterials >= GetCarryingCapacity())
@@ -106,10 +100,7 @@ public partial class WorkerEconomy : Node
         return true;
     }
 
-    public bool BeginManualDropOff(
-        BuildingEntity building,
-        int slotIndex,
-        int slotCount)
+    public bool BeginManualDropOff(BuildingEntity building)
     {
         if (_isStopped ||
             CarriedMaterials <= 0 ||
@@ -118,11 +109,12 @@ public partial class WorkerEconomy : Node
             return false;
         }
 
+        MaterialsResourceNode resumeTarget = IsValidResource(_resourceTarget)
+            ? _resourceTarget
+            : null!;
         CancelTask();
-        _resourceTarget = null!;
+        _resourceTarget = resumeTarget;
         _dropOffTarget = building;
-        _dropOffSlotIndex = slotIndex;
-        _dropOffSlotCount = Mathf.Max(slotCount, 1);
         _gatherTimeRemaining = 0.0f;
         _task = WorkerTask.MovingToManualDropOff;
         MoveToDropOff(building);
@@ -159,14 +151,13 @@ public partial class WorkerEconomy : Node
             return;
         }
 
-        _constructionTarget = null!;
-        _task = WorkerTask.Idle;
-        _unit.StopWorkerTaskMovement();
+        BecomeIdleAndStopMoving();
     }
 
     public void CancelTask()
     {
         ClearConstructionAssignment();
+        InteractionSlotRegistry.ReleaseAll(_unit);
         _task = WorkerTask.Idle;
         _resourceTarget = null!;
         _dropOffTarget = null!;
@@ -201,6 +192,9 @@ public partial class WorkerEconomy : Node
 
         if (!IsWithinResourceInteractionRange(_resourceTarget))
         {
+            InteractionSlotRegistry.Release(
+                _unit,
+                InteractionSlotRegistry.InteractionKind.Resource);
             MoveToResource();
             return;
         }
@@ -255,7 +249,7 @@ public partial class WorkerEconomy : Node
         }
     }
 
-    private void UpdateMovingToDropOff(bool manual)
+    private void UpdateMovingToDropOff()
     {
         if (!IsValidDropOff(_dropOffTarget))
         {
@@ -279,11 +273,14 @@ public partial class WorkerEconomy : Node
 
         if (!IsWithinDropOffInteractionRange(_dropOffTarget))
         {
+            InteractionSlotRegistry.Release(
+                _unit,
+                InteractionSlotRegistry.InteractionKind.DropOff);
             MoveToDropOff(_dropOffTarget);
             return;
         }
 
-        DepositCarriedMaterials(manual);
+        DepositCarriedMaterials();
     }
 
     private void UpdateMovingToConstruction()
@@ -299,8 +296,9 @@ public partial class WorkerEconomy : Node
             return;
         }
 
-        if (!IsWithinDropOffInteractionRange(_constructionTarget))
+        if (!IsWithinConstructionInteractionRange(_constructionTarget))
         {
+            _hasConstructionInteractionPosition = false;
             MoveToConstruction();
             return;
         }
@@ -317,7 +315,7 @@ public partial class WorkerEconomy : Node
         }
 
         if (_unit.IsWorkerTaskMoving ||
-            !IsWithinDropOffInteractionRange(_constructionTarget))
+            !IsWithinConstructionInteractionRange(_constructionTarget))
         {
             return;
         }
@@ -343,9 +341,10 @@ public partial class WorkerEconomy : Node
             return;
         }
 
+        InteractionSlotRegistry.Release(
+            _unit,
+            InteractionSlotRegistry.InteractionKind.Resource);
         _dropOffTarget = dropOff;
-        _dropOffSlotIndex = _resourceSlotIndex;
-        _dropOffSlotCount = _resourceSlotCount;
         _task = WorkerTask.ReturningToDropOff;
         MoveToDropOff(dropOff);
     }
@@ -358,24 +357,62 @@ public partial class WorkerEconomy : Node
             return;
         }
 
-        Vector3 interactionPosition = _resourceTarget.GetInteractionPosition(
-            _resourceSlotIndex,
-            _resourceSlotCount,
-            _definition.InteractionRange);
+        int ordinal = InteractionSlotRegistry.Reserve(
+            _unit,
+            _resourceTarget,
+            InteractionSlotRegistry.InteractionKind.Resource);
+        Vector3 interactionPosition = InteractionPositioning.GetRadialPosition(
+            _resourceTarget.GlobalPosition,
+            _resourceTarget.InteractionRadius,
+            _unit.OccupancyRadius,
+            ordinal,
+            _resourceTarget.InteractionRadius +
+                Mathf.Max(_definition.InteractionRange, 0.0f),
+            out _);
+        if (!NavigationPathing.TryResolveReachablePoint(
+                _unit,
+                interactionPosition,
+                _unit.OccupancyRadius,
+                out Vector3 reachablePosition,
+                _resourceTarget))
+        {
+            BecomeIdleAndStopMoving();
+            return;
+        }
+
         _task = WorkerTask.MovingToResource;
         _unit.MoveForWorkerTask(
-            ProjectToNavigation(interactionPosition),
+            reachablePosition,
             _unit.Definition.StoppingDistance);
     }
 
     private void MoveToDropOff(BuildingEntity building)
     {
-        Vector3 interactionPosition = building.GetInteractionPosition(
-            _dropOffSlotIndex,
-            _dropOffSlotCount,
-            _definition.InteractionRange);
+        int ordinal = InteractionSlotRegistry.Reserve(
+            _unit,
+            building,
+            InteractionSlotRegistry.InteractionKind.DropOff);
+        Vector3 interactionPosition = InteractionPositioning.GetRadialPosition(
+            building.GlobalPosition,
+            building.TargetRadius,
+            _unit.OccupancyRadius,
+            ordinal,
+            building.TargetRadius +
+                Mathf.Max(_definition.InteractionRange, 0.0f),
+            out _);
+        if (!NavigationPathing.TryResolveReachablePoint(
+                _unit,
+                interactionPosition,
+                _unit.OccupancyRadius,
+                out Vector3 reachablePosition,
+                building))
+        {
+            BecomeIdleAndStopMoving();
+            return;
+        }
+
         _unit.MoveForWorkerTask(
-            ProjectToNavigation(interactionPosition),
+            reachablePosition,
             _unit.Definition.StoppingDistance);
     }
 
@@ -387,29 +424,27 @@ public partial class WorkerEconomy : Node
             return;
         }
 
-        Vector2 approachDirection = new(
-            _unit.GlobalPosition.X - _constructionTarget.GlobalPosition.X,
-            _unit.GlobalPosition.Z - _constructionTarget.GlobalPosition.Z);
-        if (approachDirection.IsZeroApprox())
+        InteractionSlotRegistry.Reserve(
+            _unit,
+            _constructionTarget,
+            InteractionSlotRegistry.InteractionKind.Construction);
+        if (!_hasConstructionInteractionPosition &&
+            !TryChooseConstructionInteractionPosition(
+                _constructionTarget,
+                out _constructionInteractionPosition))
         {
-            approachDirection = Vector2.Right;
+            BecomeIdleAndStopMoving();
+            return;
         }
 
-        approachDirection = approachDirection.Normalized();
-        float distance = _constructionTarget.TargetRadius +
-            Mathf.Max(_definition.InteractionRange, 0.0f) * 0.5f;
-        Vector3 interactionPosition = _constructionTarget.GlobalPosition +
-            new Vector3(
-                approachDirection.X * distance,
-                0.0f,
-                approachDirection.Y * distance);
+        _hasConstructionInteractionPosition = true;
         _task = WorkerTask.MovingToConstruction;
         _unit.MoveForWorkerTask(
-            ProjectToNavigation(interactionPosition),
+            _constructionInteractionPosition,
             _unit.Definition.StoppingDistance);
     }
 
-    private void DepositCarriedMaterials(bool manual)
+    private void DepositCarriedMaterials()
     {
         Node ledgerNode = GetTree().GetFirstNodeInGroup(
             TeamResourceLedger.LedgerGroup);
@@ -422,8 +457,11 @@ public partial class WorkerEconomy : Node
         ledger.Deposit(_unit.Team, CarriedMaterials);
         CarriedMaterials = 0;
         UpdateCarryingPresentation();
+        InteractionSlotRegistry.Release(
+            _unit,
+            InteractionSlotRegistry.InteractionKind.DropOff);
 
-        if (!manual && IsValidResource(_resourceTarget))
+        if (IsValidResource(_resourceTarget))
         {
             MoveToResource();
         }
@@ -448,7 +486,9 @@ public partial class WorkerEconomy : Node
     private void BecomeIdleAndStopMoving()
     {
         ClearConstructionAssignment();
+        InteractionSlotRegistry.ReleaseAll(_unit);
         _task = WorkerTask.Idle;
+        _resourceTarget = null!;
         _dropOffTarget = null!;
         _gatherTimeRemaining = 0.0f;
         _unit.StopWorkerTaskMovement();
@@ -517,6 +557,7 @@ public partial class WorkerEconomy : Node
         }
 
         _constructionTarget = null!;
+        _hasConstructionInteractionPosition = false;
     }
 
     private bool IsWithinResourceInteractionRange(MaterialsResourceNode resource)
@@ -533,6 +574,77 @@ public partial class WorkerEconomy : Node
             GetCombinedInteractionRange(building.TargetRadius);
     }
 
+    private bool IsWithinConstructionInteractionRange(BuildingEntity building)
+    {
+        Rect2 footprint = building.GetFootprintRect();
+        Vector2 workerPosition = new(
+            _unit.GlobalPosition.X,
+            _unit.GlobalPosition.Z);
+        Vector2 closestPoint = new(
+            Mathf.Clamp(workerPosition.X, footprint.Position.X, footprint.End.X),
+            Mathf.Clamp(workerPosition.Y, footprint.Position.Y, footprint.End.Y));
+        float interactionRange = Mathf.Max(_definition.InteractionRange, 0.0f);
+        return workerPosition.DistanceSquaredTo(closestPoint) <=
+            interactionRange * interactionRange;
+    }
+
+    private bool TryChooseConstructionInteractionPosition(
+        BuildingEntity building,
+        out Vector3 interactionPosition)
+    {
+        const int candidateCount = 16;
+        const float exteriorGap = 0.1f;
+        Vector2 halfExtents = building.Definition.FootprintHalfExtents;
+        float nearestDistanceSquared = float.MaxValue;
+        interactionPosition = _unit.GlobalPosition;
+        UnitOccupancySystem occupancySystem = GetTree().GetFirstNodeInGroup(
+            UnitOccupancySystem.SystemGroup) as UnitOccupancySystem;
+
+        for (int index = 0; index < candidateCount; index++)
+        {
+            float angle = -Mathf.Pi * 0.5f +
+                Mathf.Tau * index / candidateCount;
+            Vector2 direction = new(Mathf.Cos(angle), Mathf.Sin(angle));
+            float xDistance = Mathf.Abs(direction.X) > 0.0001f
+                ? halfExtents.X / Mathf.Abs(direction.X)
+                : float.MaxValue;
+            float zDistance = Mathf.Abs(direction.Y) > 0.0001f
+                ? halfExtents.Y / Mathf.Abs(direction.Y)
+                : float.MaxValue;
+            float footprintDistance = Mathf.Min(xDistance, zDistance);
+            float centerDistance = footprintDistance +
+                _unit.OccupancyRadius + exteriorGap;
+            Vector3 requestedPosition = building.GlobalPosition + new Vector3(
+                direction.X * centerDistance,
+                0.0f,
+                direction.Y * centerDistance);
+            if (!NavigationPathing.TryResolveReachablePoint(
+                    _unit,
+                    requestedPosition,
+                    _unit.OccupancyRadius,
+                    out Vector3 reachablePosition,
+                    building) ||
+                (occupancySystem is not null &&
+                    occupancySystem.IsPositionOccupied(
+                        reachablePosition,
+                        _unit.OccupancyRadius,
+                        _unit)))
+            {
+                continue;
+            }
+
+            float distanceSquared = HorizontalDistanceSquaredTo(
+                reachablePosition);
+            if (distanceSquared < nearestDistanceSquared)
+            {
+                interactionPosition = reachablePosition;
+                nearestDistanceSquared = distanceSquared;
+            }
+        }
+
+        return nearestDistanceSquared < float.MaxValue;
+    }
+
     private float HorizontalDistanceSquaredTo(Vector3 position)
     {
         Vector2 delta = new(
@@ -545,17 +657,6 @@ public partial class WorkerEconomy : Node
     {
         return Mathf.Max(targetRadius, 0.0f) +
             Mathf.Max(_definition.InteractionRange, 0.0f);
-    }
-
-    private Vector3 ProjectToNavigation(Vector3 position)
-    {
-        Rid navigationMap = _unit.GetWorld3D().NavigationMap;
-        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
-        {
-            return position;
-        }
-
-        return NavigationServer3D.MapGetClosestPoint(navigationMap, position);
     }
 
     private int GetCarryingCapacity()

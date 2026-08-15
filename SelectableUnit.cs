@@ -12,7 +12,8 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     }
 
     public static readonly StringName FriendlySelectionGroup = "friendly_selectable_units";
-    private const float AttackApproachMargin = 0.2f;
+    public static readonly StringName OccupancyGroup = "living_unit_occupancy";
+    private const float InteractionPositionTolerance = 0.15f;
 
     [Export]
     public UnitTeam Team { get; set; } = UnitTeam.Friendly;
@@ -25,11 +26,21 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     private UnitEngagement _engagement = null!;
     private WorkerEconomy _workerEconomy = null!;
     private UnitPresentation _presentation = null!;
+    private UnitOccupancySystem _occupancySystem = null!;
     private ICombatTarget _combatTarget = null!;
+    private Vector3 _attackApproachPosition;
+    private Vector3 _attackApproachTargetPosition;
+    private int _attackApproachOrdinal = -1;
+    private uint _attackApproachMapIteration;
+    private bool _hasAttackApproach;
+    private bool _attackApproachCanAttack;
     private bool _isGameplayStopped;
 
     public float Health { get; private set; }
     public bool IsAlive => Activity != UnitActivity.Dead;
+    public bool IsOccupancyActive => IsAlive && !_isGameplayStopped;
+    public bool IsMovingForOccupancy => _movement is not null && _movement.IsMoving;
+    public float OccupancyRadius => Mathf.Max(Definition.OccupancyRadius, 0.1f);
     public bool CanAttack => Definition.CanAttack;
     public bool HasWorkerEconomy => _workerEconomy is not null;
     public int CarriedMaterials => _workerEconomy?.CarriedMaterials ?? 0;
@@ -43,7 +54,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     public bool IsSelected { get; private set; }
     public UnitActivity Activity { get; private set; } = UnitActivity.Idle;
     public Vector3 TargetPosition => GlobalPosition;
-    public float TargetRadius => 0.0f;
+    public float TargetRadius => OccupancyRadius;
 
     public override void _Ready()
     {
@@ -55,6 +66,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 
         Health = Mathf.Max(Definition.MaxHealth, 1.0f);
         AddToGroup(CombatTargetGroups.ForTeam(Team));
+        AddToGroup(OccupancyGroup);
 
         _presentation = new UnitPresentation { Name = "Presentation" };
         AddChild(_presentation);
@@ -83,6 +95,8 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
             AddChild(_workerEconomy);
             _workerEconomy.Initialize(this, Definition.WorkerEconomy);
         }
+
+        EnsureOccupancySystem();
     }
 
     public override void _PhysicsProcess(double delta)
@@ -113,6 +127,16 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         }
     }
 
+    public override void _ExitTree()
+    {
+        if (IsInstanceValid(_occupancySystem))
+        {
+            _occupancySystem.Unregister(this);
+        }
+
+        InteractionSlotRegistry.ReleaseAll(this);
+    }
+
     public void SetSelected(bool selected)
     {
         if (Team != UnitTeam.Friendly ||
@@ -128,6 +152,18 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 
     public bool SetMoveTarget(Vector3 worldTarget)
     {
+        return BeginMoveOrder(worldTarget, destinationValidated: false);
+    }
+
+    internal bool SetValidatedMoveTarget(Vector3 worldTarget)
+    {
+        return BeginMoveOrder(worldTarget, destinationValidated: true);
+    }
+
+    private bool BeginMoveOrder(
+        Vector3 worldTarget,
+        bool destinationValidated)
+    {
         if (!IsAlive || _isGameplayStopped)
         {
             return false;
@@ -136,14 +172,14 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         _workerEconomy?.CancelTask();
         ClearCombatTarget();
         Activity = UnitActivity.Moving;
-        _movement.SetMoveTarget(worldTarget, Definition.StoppingDistance);
+        _movement.SetMoveTarget(
+            worldTarget,
+            Definition.StoppingDistance,
+            destinationValidated: destinationValidated);
         return true;
     }
 
-    public bool SetGatherTarget(
-        MaterialsResourceNode target,
-        int slotIndex,
-        int slotCount)
+    public bool SetGatherTarget(MaterialsResourceNode target)
     {
         if (!IsAlive ||
             _isGameplayStopped ||
@@ -155,13 +191,10 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         ClearCombatTarget();
         _movement.CancelMoveOrder();
         Activity = UnitActivity.Idle;
-        return _workerEconomy.BeginGathering(target, slotIndex, slotCount);
+        return _workerEconomy.BeginGathering(target);
     }
 
-    public bool SetManualDropOff(
-        BuildingEntity building,
-        int slotIndex,
-        int slotCount)
+    public bool SetManualDropOff(BuildingEntity building)
     {
         if (!IsAlive ||
             _isGameplayStopped ||
@@ -173,7 +206,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         ClearCombatTarget();
         _movement.CancelMoveOrder();
         Activity = UnitActivity.Idle;
-        return _workerEconomy.BeginManualDropOff(building, slotIndex, slotCount);
+        return _workerEconomy.BeginManualDropOff(building);
     }
 
     public bool SetConstructionTarget(BuildingEntity building)
@@ -276,6 +309,67 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 
     internal bool IsWorkerTaskMoving => _movement.IsMoving;
 
+    internal void AttachOccupancySystem(UnitOccupancySystem occupancySystem)
+    {
+        _occupancySystem = occupancySystem;
+    }
+
+    internal void NotifyOccupancyMovementChanged(bool moving)
+    {
+        EnsureOccupancySystem();
+        _occupancySystem?.SetMoving(this, moving);
+    }
+
+    internal void NotifyOccupancyPositionChanged()
+    {
+        _occupancySystem?.UpdatePosition(this);
+    }
+
+    internal void SetAvoidanceParticipation(bool active)
+    {
+        _movement?.SetAvoidanceParticipation(active);
+    }
+
+    internal bool CanAcceptMovementFallback()
+    {
+        if (Activity != UnitActivity.Moving)
+        {
+            return false;
+        }
+
+        EnsureOccupancySystem();
+        return _occupancySystem is null ||
+            !_occupancySystem.IsPositionOccupied(
+                GlobalPosition,
+                OccupancyRadius,
+                this);
+    }
+
+    internal bool TryGetCongestionFallback(out Vector3 fallbackPosition)
+    {
+        if (Activity != UnitActivity.Moving)
+        {
+            fallbackPosition = GlobalPosition;
+            return false;
+        }
+
+        EnsureOccupancySystem();
+        if (_occupancySystem is not null)
+        {
+            return _occupancySystem.TryFindNearbyClearPosition(
+                this,
+                out fallbackPosition);
+        }
+
+        fallbackPosition = GlobalPosition;
+        return false;
+    }
+
+    internal void ReleaseCongestionFallback()
+    {
+        _occupancySystem?.ReleaseFallbackReservation(this);
+    }
+
     internal void MoveForWorkerTask(
         Vector3 worldTarget,
         float stoppingDistance)
@@ -287,7 +381,10 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 
         ClearCombatTarget();
         Activity = UnitActivity.Moving;
-        _movement.SetMoveTarget(worldTarget, stoppingDistance);
+        _movement.SetMoveTarget(
+            worldTarget,
+            stoppingDistance,
+            destinationValidated: true);
     }
 
     internal void StopWorkerTaskMovement()
@@ -337,16 +434,36 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
             return;
         }
 
-        if (IsInsideAttackPosition(_combatTarget))
+        if (!TryGetAttackApproachPosition(
+                _combatTarget,
+                out Vector3 approachPosition,
+                out bool canAttackFromPosition))
+        {
+            _movement.CancelMoveOrder();
+            ClearCombatTarget();
+            Activity = UnitActivity.Idle;
+            return;
+        }
+
+        if (canAttackFromPosition && IsAtInteractionPosition(approachPosition) &&
+            _combat.IsTargetInRange(_combatTarget))
         {
             _movement.CancelMoveOrder();
             Activity = UnitActivity.Attacking;
             return;
         }
 
+        if (!canAttackFromPosition && IsAtInteractionPosition(approachPosition))
+        {
+            _movement.CancelMoveOrder();
+            return;
+        }
+
         _movement.SetMoveTarget(
-            _combatTarget.TargetPosition,
-            GetPursuitStoppingDistance(_combatTarget));
+            approachPosition,
+            Definition.StoppingDistance,
+            replaceCurrentPath: false,
+            destinationValidated: true);
     }
 
     private void UpdateAttack()
@@ -358,7 +475,7 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
             return;
         }
 
-        if (!_combat.IsTargetInRange(_combatTarget))
+        if (!IsInsideAttackPosition(_combatTarget))
         {
             BeginPursuit();
             return;
@@ -373,23 +490,101 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
     private void BeginPursuit()
     {
         Activity = UnitActivity.Pursuing;
-        _movement.SetMoveTarget(
-            _combatTarget.TargetPosition,
-            GetPursuitStoppingDistance(_combatTarget));
+        if (TryGetAttackApproachPosition(
+                _combatTarget,
+                out Vector3 approachPosition,
+                out _))
+        {
+            _movement.SetMoveTarget(
+                approachPosition,
+                Definition.StoppingDistance,
+                destinationValidated: true);
+        }
     }
 
     private bool IsInsideAttackPosition(ICombatTarget target)
     {
-        float stoppingDistance = GetPursuitStoppingDistance(target);
-        return GlobalPosition.DistanceSquaredTo(target.TargetPosition) <=
-            stoppingDistance * stoppingDistance;
+        return TryGetAttackApproachPosition(
+                target,
+                out Vector3 approachPosition,
+                out bool canAttackFromPosition) &&
+            canAttackFromPosition &&
+            IsAtInteractionPosition(approachPosition) &&
+            _combat.IsTargetInRange(target);
     }
 
-    private float GetPursuitStoppingDistance(ICombatTarget target)
+    private bool TryGetAttackApproachPosition(
+        ICombatTarget target,
+        out Vector3 approachPosition,
+        out bool canAttackFromPosition)
     {
-        return Mathf.Max(
-            Definition.AttackRange + target.TargetRadius - AttackApproachMargin,
+        if (!IsValidCombatTarget(target) || target is not GodotObject targetObject)
+        {
+            approachPosition = GlobalPosition;
+            canAttackFromPosition = false;
+            return false;
+        }
+
+        int ordinal = InteractionSlotRegistry.Reserve(
+            this,
+            targetObject,
+            InteractionSlotRegistry.InteractionKind.Attack);
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        uint mapIteration = NavigationServer3D.MapGetIterationId(navigationMap);
+        float refreshDistance = Mathf.Max(
+            Definition.MovingTargetRefreshDistance,
+            0.1f);
+        bool needsRefresh = !_hasAttackApproach ||
+            _attackApproachOrdinal != ordinal ||
+            _attackApproachMapIteration != mapIteration ||
+            HorizontalDistanceSquared(
+                _attackApproachTargetPosition,
+                target.TargetPosition) >= refreshDistance * refreshDistance;
+        if (!needsRefresh)
+        {
+            approachPosition = _attackApproachPosition;
+            canAttackFromPosition = _attackApproachCanAttack;
+            return true;
+        }
+
+        float maximumAttackCenterDistance = Mathf.Max(
+            Definition.AttackRange + target.TargetRadius,
             0.0f);
+        Vector3 requestedPosition = InteractionPositioning.GetRadialPosition(
+            target.TargetPosition,
+            target.TargetRadius,
+            OccupancyRadius,
+            ordinal,
+            maximumAttackCenterDistance,
+            out canAttackFromPosition);
+        if (!NavigationPathing.TryResolveReachablePoint(
+                this,
+                requestedPosition,
+                OccupancyRadius,
+                out approachPosition,
+                targetObject))
+        {
+            return false;
+        }
+
+        _attackApproachPosition = approachPosition;
+        _attackApproachTargetPosition = target.TargetPosition;
+        _attackApproachOrdinal = ordinal;
+        _attackApproachMapIteration = mapIteration;
+        _hasAttackApproach = true;
+        _attackApproachCanAttack = canAttackFromPosition;
+        return true;
+    }
+
+    private bool IsAtInteractionPosition(Vector3 position)
+    {
+        Vector2 delta = new(
+            GlobalPosition.X - position.X,
+            GlobalPosition.Z - position.Z);
+        float tolerance = Mathf.Max(
+            Definition.StoppingDistance + InteractionPositionTolerance,
+            0.1f);
+        return delta.LengthSquared() <= tolerance * tolerance;
     }
 
     private bool IsValidCombatTarget(ICombatTarget target)
@@ -400,7 +595,20 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
 
     private void ClearCombatTarget()
     {
+        InteractionSlotRegistry.Release(
+            this,
+            InteractionSlotRegistry.InteractionKind.Attack);
+        _hasAttackApproach = false;
+        _attackApproachOrdinal = -1;
         _combatTarget = null!;
+    }
+
+    private static float HorizontalDistanceSquared(
+        Vector3 first,
+        Vector3 second)
+    {
+        Vector2 delta = new(first.X - second.X, first.Z - second.Z);
+        return delta.LengthSquared();
     }
 
     private void Die()
@@ -415,6 +623,27 @@ public partial class SelectableUnit : MeshInstance3D, ICombatTarget
         _presentation.HideUnit();
         RemoveFromGroup(FriendlySelectionGroup);
         RemoveFromGroup(CombatTargetGroups.ForTeam(Team));
+        RemoveFromGroup(OccupancyGroup);
+        if (IsInstanceValid(_occupancySystem))
+        {
+            _occupancySystem.Unregister(this);
+        }
+
         QueueFree();
+    }
+
+    private void EnsureOccupancySystem()
+    {
+        if (IsInstanceValid(_occupancySystem))
+        {
+            return;
+        }
+
+        _occupancySystem = GetTree().GetFirstNodeInGroup(
+            UnitOccupancySystem.SystemGroup) as UnitOccupancySystem;
+        if (IsInstanceValid(_occupancySystem))
+        {
+            _occupancySystem.Register(this);
+        }
     }
 }

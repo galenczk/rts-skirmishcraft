@@ -14,7 +14,7 @@ Phase 19 integrates the implemented systems into the default replayable MVP skir
 - Destroy the red headquarters to win; losing the blue headquarters causes defeat.
 - Press `R` after an outcome to reload a clean complete match.
 
-The values and enemy behavior remain provisional prototype configuration. `F1` through `F6` preserve the existing scale and subsystem test scenarios; `F7` resets the complete MVP skirmish.
+The values and enemy behavior remain provisional prototype configuration. `F1` through `F4` use the normal battlefield, `F5` loads the isolated 500-unit large-map formation stress test, `F6` preserves the economy subsystem scenario, and `F7` resets the complete MVP skirmish.
 
 ## Prototype objective
 

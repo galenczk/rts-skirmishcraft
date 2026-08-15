@@ -1,4 +1,5 @@
 using Godot;
+using System;
 
 public partial class MaterialsResourceNode : MeshInstance3D
 {
@@ -8,10 +9,13 @@ public partial class MaterialsResourceNode : MeshInstance3D
     public MaterialsNodeDefinition Definition { get; set; } = null!;
 
     private StandardMaterial3D _depletedMaterial = null!;
+    private NavigationObstacle3D _navigationObstacle = null!;
+
+    public event Action<MaterialsResourceNode> Depleted;
 
     public int RemainingQuantity { get; private set; }
     public bool IsDepleted => RemainingQuantity <= 0;
-    public float InteractionRadius => Mathf.Max(Definition.InteractionRadius, 0.0f);
+    public float InteractionRadius => Mathf.Max(Definition.FootprintRadius, 0.0f);
 
     public override void _Ready()
     {
@@ -33,6 +37,9 @@ public partial class MaterialsResourceNode : MeshInstance3D
             Roughness = 1.0f,
         };
         AddToGroup(ResourceNodeGroup);
+        _navigationObstacle = CreateNavigationObstacle();
+        AddChild(_navigationObstacle);
+        _navigationObstacle.AddToGroup(NavigationPathing.NavigationSourceGroup);
         UpdateDepletedPresentation();
     }
 
@@ -46,23 +53,13 @@ public partial class MaterialsResourceNode : MeshInstance3D
         int gatheredAmount = Mathf.Min(requestedAmount, RemainingQuantity);
         RemainingQuantity -= gatheredAmount;
         UpdateDepletedPresentation();
-        return gatheredAmount;
-    }
+        if (IsDepleted)
+        {
+            DisableNavigationInfluence();
+            Depleted?.Invoke(this);
+        }
 
-    public Vector3 GetInteractionPosition(
-        int slotIndex,
-        int slotCount,
-        float workerInteractionRange)
-    {
-        int effectiveSlotCount = Mathf.Max(slotCount, 1);
-        int effectiveSlotIndex = Mathf.PosMod(slotIndex, effectiveSlotCount);
-        float angle = Mathf.Tau * effectiveSlotIndex / effectiveSlotCount;
-        float distance = InteractionRadius +
-            Mathf.Max(workerInteractionRange, 0.0f) * 0.5f;
-        return GlobalPosition + new Vector3(
-            Mathf.Cos(angle) * distance,
-            0.0f,
-            Mathf.Sin(angle) * distance);
+        return gatheredAmount;
     }
 
     public static SphereMesh CreatePlaceholderMesh(MaterialsNodeDefinition definition)
@@ -94,5 +91,46 @@ public partial class MaterialsResourceNode : MeshInstance3D
 
         MaterialOverride = _depletedMaterial;
         Scale = new Vector3(1.0f, 0.2f, 1.0f);
+    }
+
+    private NavigationObstacle3D CreateNavigationObstacle()
+    {
+        const int segments = 12;
+        float radius = Mathf.Max(InteractionRadius, 0.1f);
+        Vector3[] vertices = new Vector3[segments];
+        for (int index = 0; index < segments; index++)
+        {
+            float angle = -Mathf.Pi * 0.5f +
+                Mathf.Tau * index / segments;
+            vertices[index] = new Vector3(
+                Mathf.Cos(angle) * radius,
+                0.0f,
+                Mathf.Sin(angle) * radius);
+        }
+
+        float height = Mathf.Max(Definition.PlaceholderDimensions.Y, 0.1f);
+        return new NavigationObstacle3D
+        {
+            Name = "NavigationObstacle3D",
+            Position = new Vector3(0.0f, -height * 0.5f, 0.0f),
+            Vertices = vertices,
+            Height = height,
+            AffectNavigationMesh = true,
+            CarveNavigationMesh = false,
+            AvoidanceEnabled = true,
+        };
+    }
+
+    private void DisableNavigationInfluence()
+    {
+        if (!IsInstanceValid(_navigationObstacle))
+        {
+            return;
+        }
+
+        _navigationObstacle.AffectNavigationMesh = false;
+        _navigationObstacle.AvoidanceEnabled = false;
+        _navigationObstacle.RemoveFromGroup(
+            NavigationPathing.NavigationSourceGroup);
     }
 }

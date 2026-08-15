@@ -342,10 +342,7 @@ public partial class EnemyMacroController : Node
             }
 
             MaterialsResourceNode resource = FindNearestResource(worker, resources);
-            worker.SetGatherTarget(
-                resource,
-                index,
-                workers.Count);
+            worker.SetGatherTarget(resource);
         }
     }
 

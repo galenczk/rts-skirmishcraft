@@ -20,7 +20,9 @@ Do not treat results from one machine as generally representative. Record the Go
 - `F2`: respawn 20 friendly units.
 - `F3`: respawn 100 friendly units.
 - `F4`: respawn 250 friendly units.
-- `F5`: respawn 500 friendly units.
+- `F5`: load the dedicated 500-friendly-unit formation stress battlefield. Its
+  960 x 720 playable area, faster test-camera pan, wider test zoom, and sparse
+  graybox obstacles are isolated from the normal skirmish battlefield.
 - `F6`: load the mixed-role scenario with eight combat units and four workers per team, resetting blue to 1,000 deposited Materials.
 - `F7`: reset the complete MVP skirmish used at project startup. Red workers gather, construct one production building, produce four-unit waves, and attack autonomously.
 - `B`: enter production-building placement mode.
@@ -33,7 +35,7 @@ Do not treat results from one machine as generally representative. Record the Go
 - With a completed production building selected, `X` cancels the newest queued unit for a full refund.
 - With a completed production building selected, right click valid ground to set or change its rally point.
 
-The complete MVP skirmish loads automatically when the project starts; `F7` resets it during an active match. Changing a scenario clears selection and replaces both teams. The `F1` through `F5` scenarios retain their existing combat-unit-only layouts. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. The MVP/F7 scenario enables the scripted enemy macro; the debug overlay reports its current state, red Materials, production status, queue, and assembling-wave count. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. The preplaced tall headquarters also serves as the Materials drop-off. Buildings placed with `B` are wider production-building construction sites; after completion they produce combat units but do not accept Materials.
+The complete MVP skirmish loads automatically when the project starts; `F7` resets it during an active match. Changing a scenario clears selection and replaces both teams. `F1` through `F4` retain the normal battlefield and existing combat-unit-only layouts. `F5` remains combat-unit-only but temporarily replaces the ground, navigation bounds, camera limits, and test obstacles; switching to any other preset restores the normal battlefield. At movement speed 4, its 1,200-unit corner-to-corner distance is approximately five minutes of unobstructed travel. `F6` is a role/economy behavior check rather than a movement-count benchmark: workers are the short, tapered primitives in the same blue/red team colors as their combat units. The MVP/F7 scenario enables the scripted enemy macro; the debug overlay reports its current state, red Materials, production status, queue, and assembling-wave count. The gold primitives are finite neutral Materials nodes. A small gold marker above a worker means it is carrying Materials, and the top-left overlay shows the blue team's deposited total. The preplaced tall headquarters also serves as the Materials drop-off. Buildings placed with `B` are wider production-building construction sites; after completion they produce combat units but do not accept Materials.
 
 After Phase 6, red and blue units can damage one another when they are within attack range. For a movement-only baseline, issue commands away from the red group and record the run before combat changes either unit count. Combat-enabled runs should be labeled separately rather than compared directly with pre-combat movement baselines.
 
@@ -50,7 +52,7 @@ The overlay does not currently display CPU time or frame time. Use the Godot deb
 
 ## Test procedure
 
-Repeat this procedure for `F2` (20), `F3` (100), `F4` (250), and `F5` (500). Use `F1` before or after the sequence to confirm that the default scene can be restored.
+Repeat this procedure for `F2` (20), `F3` (100), `F4` (250), and `F5` (500). On `F5`, additionally test short translations inside the formation footprint, medium lateral/reverse moves, long cross-map moves, disconnected selections, and routes around the graybox obstacles. Use `F1` before or after the sequence to confirm that the normal battlefield and camera are restored.
 
 1. Launch `SkirmishSandbox.tscn` and allow the FPS display to settle for several seconds.
 2. Press the preset hotkey and confirm the friendly and enemy counts in the overlay.
@@ -81,8 +83,8 @@ Suggested qualitative terms for responsiveness are `immediate`, `noticeable dela
 - Each friendly unit owns a `NavigationAgent3D` and requests its own path.
 - Navigation avoidance is disabled, so units can overlap or pass through one another while moving.
 - Units move directly toward successive path points at constant speed with no acceleration, turning, animation, or physical collision response.
-- Multi-unit destinations use the current deterministic square-grid slot assignment. This is easy to replace and is not a formation design.
-- Destination slots that fall outside the navigation mesh are independently snapped to the closest navigable point, which can cause bunching near battlefield edges, especially at high counts.
-- Units do not maintain spacing or group cohesion while traveling.
-- The flat, obstacle-free navigation mesh does not exercise routing around obstacles or inaccessible regions.
+- A coherent, compact formation receiving a short command translates its existing topology directly. Disconnected, dispersed, medium-distance, and long-distance selections use one centered, near-square destination lattice with deterministic locality-preserving assignment. These rules remain prototype behavior, not a final formation design.
+- Destination slots are independently validated and repaired when blocked or outside usable navigation space, which can distort the lattice near obstacles and battlefield edges.
+- Source-cluster locality influences slot assignment, but units do not maintain a rigid formation while traveling.
+- The F5 battlefield includes sparse graybox routing obstacles, but it does not represent production map geometry or a comprehensive inaccessible-terrain test.
 - The runtime overlay provides a convenient FPS reading, not a detailed performance profile; deeper CPU and frame-time analysis requires Godot's profiler or an external tool.

@@ -10,6 +10,7 @@ Role = 1
 MaxHealth = 100.0
 MovementSpeed = 4.0
 StoppingDistance = 0.3
+OccupancyRadius = 0.5
 CanAttack = false
 AttackRange = 0.0
 EngagementRange = 0.0

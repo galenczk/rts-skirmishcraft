@@ -20,7 +20,6 @@ public partial class SkirmishSandbox : Node3D
     private static readonly StringName CancelPlacementAction = "ui_cancel";
     private static readonly StringName RestartMatchAction = "restart_match";
     private static readonly StringName MovementGroundGroup = "movement_ground";
-    private static readonly StringName NavigationSourceGroup = "navigation_source";
     private const float DragThresholdPixels = 6.0f;
     private const float ClickBoundsPaddingPixels = 4.0f;
     private const float GroundRayLength = 1000.0f;
@@ -35,7 +34,28 @@ public partial class SkirmishSandbox : Node3D
     private const int MacroEnemyCombatUnits = 0;
     private const int MacroWorkersPerTeam = 3;
     private const float DestinationSpacingTolerance = 0.001f;
-    private const float UnitPlacementRadius = 0.5f;
+    private const int AdditionalDestinationCandidates = 128;
+    private const int MaximumDestinationCandidates = 4096;
+
+    private static readonly BattlefieldConfiguration NormalBattlefield = new(
+        playableSize: new Vector2(68.0f, 50.0f),
+        visibleGroundSize: new Vector2(70.0f, 52.0f),
+        navigationCellSize: 0.25f,
+        cameraPanSpeed: 14.0f,
+        cameraMaximumZoom: 32.0f,
+        cameraStartingZoom: 23.2f,
+        cameraStartingPosition: new Vector3(2.9f, 0.0f, 6.2f),
+        isFormationStressTest: false);
+
+    private static readonly BattlefieldConfiguration FormationStressBattlefield = new(
+        playableSize: new Vector2(960.0f, 720.0f),
+        visibleGroundSize: new Vector2(968.0f, 728.0f),
+        navigationCellSize: 0.5f,
+        cameraPanSpeed: 90.0f,
+        cameraMaximumZoom: 120.0f,
+        cameraStartingZoom: 58.0f,
+        cameraStartingPosition: new Vector3(0.0f, 0.0f, 255.0f),
+        isFormationStressTest: true);
 
     [Export]
     public float DebugSpawnSpacing { get; set; } = 1.1f;
@@ -44,7 +64,31 @@ public partial class SkirmishSandbox : Node3D
     public float DebugTeamCenterSeparation { get; set; } = 16.5f;
 
     [Export]
-    public float MinimumMoveDestinationSpacing { get; set; } = 1.1f;
+    public float MoveDestinationPadding { get; set; } = 0.1f;
+
+    [Export(PropertyHint.Range, "8,128,8")]
+    public int MovePathQueriesPerFrame { get; set; } = 64;
+
+    [Export(PropertyHint.Range, "1.0,8.0,0.25")]
+    public float FormationClusterLinkDistance { get; set; } = 3.0f;
+
+    [Export(PropertyHint.Range, "0.5,1.0,0.01")]
+    public float FormationRobustRadiusPercentile { get; set; } = 0.95f;
+
+    [Export(PropertyHint.Range, "0.25,2.0,0.25")]
+    public float FormationShortDistanceRadiusMultiplier { get; set; } = 1.0f;
+
+    [Export(PropertyHint.Range, "1.5,6.0,0.25")]
+    public float FormationLongDistanceRadiusMultiplier { get; set; } = 3.0f;
+
+    [Export(PropertyHint.Range, "30.0,150.0,5.0")]
+    public float FormationLongReorientationAngleDegrees { get; set; } = 75.0f;
+
+    [Export(PropertyHint.Range, "0.25,2.0,0.25")]
+    public float FormationArrivalTransitionRadiusMultiplier { get; set; } = 0.75f;
+
+    [Export(PropertyHint.Range, "1.0,3.0,0.05")]
+    public float FormationTopologyCompactnessThreshold { get; set; } = 1.4f;
 
     [Export]
     public UnitDefinition CombatDefinition { get; set; } = null!;
@@ -79,8 +123,10 @@ public partial class SkirmishSandbox : Node3D
     private Node3D _enemyUnits = null!;
     private Node3D _buildings = null!;
     private Node3D _resourceNodes = null!;
+    private Node3D _formationStressObstacles = null!;
     private TeamResourceLedger _resourceLedger = null!;
     private EnemyMacroController _enemyMacroController = null!;
+    private UnitOccupancySystem _unitOccupancySystem = null!;
     private NavigationRegion3D _navigationRegion = null!;
     private Mesh _friendlyUnitMesh = null!;
     private Mesh _enemyUnitMesh = null!;
@@ -88,6 +134,7 @@ public partial class SkirmishSandbox : Node3D
     private Transform3D[] _defaultEnemyTransforms = null!;
     private Rect2 _playableBattlefieldBounds;
     private Vector2 _playableBattlefieldSize;
+    private BattlefieldConfiguration _battlefieldConfiguration = NormalBattlefield;
     private Control _selectionRectangle = null!;
     private Label _debugMetrics = null!;
     private CanvasLayer _matchOutcomeOverlay = null!;
@@ -108,10 +155,86 @@ public partial class SkirmishSandbox : Node3D
     private bool _isPlacementMode;
     private bool _isPlacementValid;
     private bool _navigationRebuildQueued;
+    private bool _hasPendingMoveOrder;
+    private readonly List<SelectableUnit> _pendingMoveUnits = new();
+    private Vector3 _pendingMoveDestination;
     private bool _headquartersConfigurationValid;
     private bool _headquartersRegistrationError;
     private int _runtimeBuildingSerial;
     private int _producedUnitSerial;
+    private ulong _moveCommandSerial;
+    private MoveCommandBatch _moveCommandBatch = null!;
+    private ulong _formationPlanSerial;
+    private readonly List<FormationArrivalTransition> _formationTransitions = new();
+    private readonly Dictionary<ulong, Vector2> _formationHeadings = new();
+    private MovementDiagnosticCommand _movementDiagnosticCommand = null!;
+
+    private sealed class BattlefieldConfiguration
+    {
+        public readonly Vector2 PlayableSize;
+        public readonly Vector2 VisibleGroundSize;
+        public readonly float NavigationCellSize;
+        public readonly float CameraPanSpeed;
+        public readonly float CameraMaximumZoom;
+        public readonly float CameraStartingZoom;
+        public readonly Vector3 CameraStartingPosition;
+        public readonly bool IsFormationStressTest;
+
+        public BattlefieldConfiguration(
+            Vector2 playableSize,
+            Vector2 visibleGroundSize,
+            float navigationCellSize,
+            float cameraPanSpeed,
+            float cameraMaximumZoom,
+            float cameraStartingZoom,
+            Vector3 cameraStartingPosition,
+            bool isFormationStressTest)
+        {
+            PlayableSize = playableSize;
+            VisibleGroundSize = visibleGroundSize;
+            NavigationCellSize = navigationCellSize;
+            CameraPanSpeed = cameraPanSpeed;
+            CameraMaximumZoom = cameraMaximumZoom;
+            CameraStartingZoom = cameraStartingZoom;
+            CameraStartingPosition = cameraStartingPosition;
+            IsFormationStressTest = isFormationStressTest;
+        }
+    }
+
+    private sealed class FormationArrivalTransition
+    {
+        public ulong PlanSerial;
+        public List<SelectableUnit> Units = new();
+        public List<Vector3> FinalDestinations = new();
+        public Vector2 ApproachCentroid;
+        public Vector2 ArrivalHeading;
+        public float TriggerDistance;
+    }
+
+    private sealed class MovementDiagnosticCommand
+    {
+        public ulong PlanSerial;
+        public List<SelectableUnit> Units = new();
+        public ulong StartedMilliseconds;
+        public ulong LastStatusMilliseconds;
+    }
+
+    private sealed class MoveCommandBatch
+    {
+        public ulong Serial;
+        public List<SelectableUnit> Units = null!;
+        public List<Vector3> Candidates = null!;
+        public List<int> UnitOrder = null!;
+        public int[] PreferredCandidateIndices = null!;
+        public bool[] ClaimedCandidates = null!;
+        public bool[] UnitHandled = null!;
+        public Queue<int> RetryUnits = new();
+        public int InitialCursor;
+        public int QueryBudget;
+        public int QueriesUsed;
+        public int CurrentRetryUnit = -1;
+        public int RetryCandidateCursor;
+    }
 
     public override void _Ready()
     {
@@ -120,10 +243,20 @@ public partial class SkirmishSandbox : Node3D
         _enemyUnits = GetNode<Node3D>("EnemyUnits");
         _buildings = GetNode<Node3D>("Buildings");
         _resourceNodes = GetNode<Node3D>("ResourceNodes");
+        _formationStressObstacles = new Node3D
+        {
+            Name = "FormationStressObstacles",
+        };
+        AddChild(_formationStressObstacles);
         _resourceLedger = GetNode<TeamResourceLedger>("TeamResourceLedger");
         _enemyMacroController = GetNode<EnemyMacroController>(
             "EnemyMacroController");
         _enemyMacroController.Initialize(this, ProductionBuildingDefinition);
+        _unitOccupancySystem = new UnitOccupancySystem
+        {
+            Name = "UnitOccupancySystem",
+        };
+        AddChild(_unitOccupancySystem);
         _navigationRegion = GetNode<NavigationRegion3D>("NavigationRegion3D");
         _friendlyUnitMesh = GetNode<MeshInstance3D>("FriendlyUnits/Friendly01").Mesh;
         _enemyUnitMesh = GetNode<MeshInstance3D>("EnemyUnits/Enemy01").Mesh;
@@ -149,6 +282,11 @@ public partial class SkirmishSandbox : Node3D
 
     public override void _Process(double delta)
     {
+        ProcessPendingMoveOrder();
+        ProcessMoveCommandBatch();
+        ProcessFormationArrivalTransitions();
+        ProcessMovementDiagnostic();
+
         if (_isPlacementMode)
         {
             UpdatePlacementPreview(GetViewport().GetMousePosition());
@@ -279,7 +417,7 @@ public partial class SkirmishSandbox : Node3D
         }
         else if (@event.IsActionPressed(Load500UnitScenarioAction))
         {
-            RespawnFriendlyUnits(500);
+            RespawnFriendlyUnits(500, useFormationStressBattlefield: true);
         }
         else if (@event.IsActionPressed(LoadMixedScenarioAction))
         {
@@ -297,9 +435,16 @@ public partial class SkirmishSandbox : Node3D
         return true;
     }
 
-    private void RespawnFriendlyUnits(int count, bool useDefaultLayout = false)
+    private void RespawnFriendlyUnits(
+        int count,
+        bool useDefaultLayout = false,
+        bool useFormationStressBattlefield = false)
     {
         BeginScenarioReplacement();
+        ApplyBattlefieldConfiguration(
+            useFormationStressBattlefield
+                ? FormationStressBattlefield
+                : NormalBattlefield);
         ClearSelection();
 
         ClearUnitContainer(_friendlyUnits);
@@ -311,7 +456,9 @@ public partial class SkirmishSandbox : Node3D
                 : CreateTestSpawnTransform(
                     index,
                     count,
-                    DebugTeamCenterSeparation * 0.5f);
+                    useFormationStressBattlefield
+                        ? 255.0f
+                        : DebugTeamCenterSeparation * 0.5f);
             SpawnUnit(
                 _friendlyUnits,
                 $"Friendly{index + 1:D3}",
@@ -327,7 +474,11 @@ public partial class SkirmishSandbox : Node3D
         }
         else
         {
-            RespawnEnemies(useDefaultLayout: false);
+            RespawnEnemies(
+                useDefaultLayout: false,
+                centerZOverride: useFormationStressBattlefield
+                    ? -255.0f
+                    : null);
         }
 
         ResetScenarioBuildings();
@@ -339,11 +490,17 @@ public partial class SkirmishSandbox : Node3D
     private void BeginScenarioReplacement()
     {
         _enemyMacroController.Deactivate();
+        InteractionSlotRegistry.Clear();
         _isReplacingScenario = true;
         _isMatchTrackingActive = false;
         ClearRegisteredHeadquarters();
         _isMatchEnded = false;
         _matchOutcomeOverlay.Visible = false;
+        _hasPendingMoveOrder = false;
+        _pendingMoveUnits.Clear();
+        CancelFormationPlan();
+        CancelMoveCommandBatch();
+        _formationHeadings.Clear();
         _isDragging = false;
         _selectionRectangle.Visible = false;
         ClearBuildingSelection();
@@ -358,13 +515,16 @@ public partial class SkirmishSandbox : Node3D
         QueueNavigationRebuild();
     }
 
-    private void RespawnEnemies(bool useDefaultLayout)
+    private void RespawnEnemies(
+        bool useDefaultLayout,
+        float? centerZOverride = null)
     {
         ClearUnitContainer(_enemyUnits);
 
         float zOffset = useDefaultLayout
             ? 0.0f
-            : -DebugTeamCenterSeparation * 0.5f - GetAverageZ(_defaultEnemyTransforms);
+            : (centerZOverride ?? -DebugTeamCenterSeparation * 0.5f) -
+                GetAverageZ(_defaultEnemyTransforms);
 
         for (int index = 0; index < _defaultEnemyTransforms.Length; index++)
         {
@@ -387,6 +547,7 @@ public partial class SkirmishSandbox : Node3D
     private void RespawnMixedRoleScenario()
     {
         BeginScenarioReplacement();
+        ApplyBattlefieldConfiguration(NormalBattlefield);
         _resourceLedger.Deposit(
             UnitTeam.Friendly,
             Mathf.Max(MixedScenarioStartingMaterials, 0));
@@ -444,6 +605,7 @@ public partial class SkirmishSandbox : Node3D
     private void RespawnMacroScenario()
     {
         BeginScenarioReplacement();
+        ApplyBattlefieldConfiguration(NormalBattlefield);
         ClearSelection();
         ClearUnitContainer(_friendlyUnits);
         ClearUnitContainer(_enemyUnits);
@@ -553,6 +715,7 @@ public partial class SkirmishSandbox : Node3D
                 !building.Production.HasCompletedUnitWaiting ||
                 !TryFindProductionSpawnPosition(
                     building,
+                    building.Production.Definition.ProducedUnitDefinition,
                     out Vector3 spawnPosition))
             {
                 continue;
@@ -582,9 +745,13 @@ public partial class SkirmishSandbox : Node3D
                         spawnHeight,
                         spawnPosition.Z)));
             production.AcknowledgeSpawn();
-            if (production.HasRallyPoint)
+            if (production.HasRallyPoint &&
+                TryFindAvailableUnitDestination(
+                    producedUnit,
+                    production.RallyPoint,
+                    out Vector3 rallyDestination))
             {
-                producedUnit.SetMoveTarget(production.RallyPoint);
+                producedUnit.SetMoveTarget(rallyDestination);
             }
         }
     }
@@ -603,8 +770,14 @@ public partial class SkirmishSandbox : Node3D
             : _enemyUnitMesh;
     }
 
+    private static float GetOccupancyRadius(UnitDefinition definition)
+    {
+        return Mathf.Max(definition.OccupancyRadius, 0.1f);
+    }
+
     private bool TryFindProductionSpawnPosition(
         BuildingEntity productionBuilding,
+        UnitDefinition producedDefinition,
         out Vector3 spawnPosition)
     {
         Rid navigationMap = GetWorld3D().NavigationMap;
@@ -616,9 +789,10 @@ public partial class SkirmishSandbox : Node3D
 
         const int positionsPerRing = 16;
         const int ringCount = 5;
-        const float ringSpacing = 1.2f;
+        float producedRadius = GetOccupancyRadius(producedDefinition);
+        float ringSpacing = producedRadius * 2.0f + 0.2f;
         float initialRadius = productionBuilding.TargetRadius +
-            UnitPlacementRadius + 0.75f;
+            producedRadius + 0.75f;
         for (int ring = 0; ring < ringCount; ring++)
         {
             float radius = initialRadius + ring * ringSpacing;
@@ -641,7 +815,9 @@ public partial class SkirmishSandbox : Node3D
                     navigationPosition.Z);
                 if (requestedHorizontal.DistanceSquaredTo(navigationHorizontal) >
                         0.25f ||
-                    !IsProductionSpawnPositionValid(navigationPosition))
+                    !IsProductionSpawnPositionValid(
+                        navigationPosition,
+                        producedRadius))
                 {
                     continue;
                 }
@@ -655,11 +831,13 @@ public partial class SkirmishSandbox : Node3D
         return false;
     }
 
-    private bool IsProductionSpawnPositionValid(Vector3 position)
+    private bool IsProductionSpawnPositionValid(
+        Vector3 position,
+        float producedRadius)
     {
         Vector2 horizontalPosition = new(position.X, position.Z);
         Rect2 safeBattlefieldBounds = _playableBattlefieldBounds.Grow(
-            -UnitPlacementRadius);
+            -producedRadius);
         if (!safeBattlefieldBounds.HasPoint(horizontalPosition))
         {
             return false;
@@ -671,7 +849,7 @@ public partial class SkirmishSandbox : Node3D
                 building.GlobalPosition.X,
                 building.GlobalPosition.Z);
             float requiredDistance = building.TargetRadius +
-                UnitPlacementRadius + 0.1f;
+                producedRadius + 0.1f;
             if (horizontalPosition.DistanceSquaredTo(buildingPosition) <
                 requiredDistance * requiredDistance)
             {
@@ -679,14 +857,14 @@ public partial class SkirmishSandbox : Node3D
             }
         }
 
-        const float minimumUnitSpacing = UnitPlacementRadius * 2.0f;
         foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
         {
             Vector2 unitPosition = new(
                 unit.GlobalPosition.X,
                 unit.GlobalPosition.Z);
+            float requiredDistance = producedRadius + unit.OccupancyRadius;
             if (horizontalPosition.DistanceSquaredTo(unitPosition) <
-                minimumUnitSpacing * minimumUnitSpacing)
+                requiredDistance * requiredDistance)
             {
                 return false;
             }
@@ -695,7 +873,8 @@ public partial class SkirmishSandbox : Node3D
         foreach (Node child in _resourceNodes.GetChildren())
         {
             if (child is not MaterialsResourceNode resourceNode ||
-                !IsInstanceValid(resourceNode))
+                !IsInstanceValid(resourceNode) ||
+                resourceNode.IsDepleted)
             {
                 continue;
             }
@@ -704,7 +883,120 @@ public partial class SkirmishSandbox : Node3D
                 resourceNode.GlobalPosition.X,
                 resourceNode.GlobalPosition.Z);
             float requiredDistance = resourceNode.InteractionRadius +
-                UnitPlacementRadius;
+                producedRadius;
+            if (horizontalPosition.DistanceSquaredTo(resourcePosition) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryFindAvailableUnitDestination(
+        SelectableUnit movingUnit,
+        Vector3 requestedCenter,
+        out Vector3 destination)
+    {
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        {
+            destination = Vector3.Zero;
+            return false;
+        }
+
+        const int maximumCandidates = 128;
+        for (int candidateIndex = -1;
+             candidateIndex < maximumCandidates;
+             candidateIndex++)
+        {
+            Vector3 requested = candidateIndex < 0
+                ? requestedCenter
+                : InteractionPositioning.GetRadialPosition(
+                    requestedCenter,
+                    0.0f,
+                    movingUnit.OccupancyRadius,
+                    candidateIndex,
+                    float.MaxValue,
+                    out _);
+            Vector3 projected = NavigationServer3D.MapGetClosestPoint(
+                navigationMap,
+                requested);
+            Vector2 projectionDelta = new(
+                requested.X - projected.X,
+                requested.Z - projected.Z);
+            if (projectionDelta.LengthSquared() > 0.25f ||
+                !IsUnitDestinationAvailable(
+                    movingUnit,
+                    projected,
+                    movingUnit.OccupancyRadius))
+            {
+                continue;
+            }
+
+            destination = projected;
+            return true;
+        }
+
+        destination = Vector3.Zero;
+        return false;
+    }
+
+    private bool IsUnitDestinationAvailable(
+        SelectableUnit movingUnit,
+        Vector3 position,
+        float occupancyRadius)
+    {
+        Vector2 horizontalPosition = new(position.X, position.Z);
+        if (!_playableBattlefieldBounds.Grow(-occupancyRadius)
+                .HasPoint(horizontalPosition))
+        {
+            return false;
+        }
+
+        foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
+        {
+            if (unit == movingUnit)
+            {
+                continue;
+            }
+
+            Vector2 unitPosition = new(unit.GlobalPosition.X, unit.GlobalPosition.Z);
+            float requiredDistance = occupancyRadius + unit.OccupancyRadius;
+            if (horizontalPosition.DistanceSquaredTo(unitPosition) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        foreach (BuildingEntity building in GetLivingBuildings())
+        {
+            Vector2 buildingPosition = new(
+                building.GlobalPosition.X,
+                building.GlobalPosition.Z);
+            float requiredDistance = occupancyRadius + building.TargetRadius;
+            if (horizontalPosition.DistanceSquaredTo(buildingPosition) <
+                requiredDistance * requiredDistance)
+            {
+                return false;
+            }
+        }
+
+        foreach (Node child in _resourceNodes.GetChildren())
+        {
+            if (child is not MaterialsResourceNode resource ||
+                !IsInstanceValid(resource) ||
+                resource.IsDepleted)
+            {
+                continue;
+            }
+
+            Vector2 resourcePosition = new(
+                resource.GlobalPosition.X,
+                resource.GlobalPosition.Z);
+            float requiredDistance = occupancyRadius + resource.InteractionRadius;
             if (horizontalPosition.DistanceSquaredTo(resourcePosition) <
                 requiredDistance * requiredDistance)
             {
@@ -1038,7 +1330,13 @@ public partial class SkirmishSandbox : Node3D
                 height * 0.5f,
                 horizontalPosition.Y),
         };
+        resourceNode.Depleted += HandleResourceDepleted;
         _resourceNodes.AddChild(resourceNode);
+    }
+
+    private void HandleResourceDepleted(MaterialsResourceNode resourceNode)
+    {
+        QueueNavigationRebuild();
     }
 
     private void HandleBuildingDestroyed(BuildingEntity building)
@@ -1115,9 +1413,130 @@ public partial class SkirmishSandbox : Node3D
 
     private void ConfigureCameraBounds()
     {
-        GetNode<RtsCameraController>("CameraRig").PanLimits = new Vector2(
+        Vector2 panLimits = new(
             Mathf.Max(_playableBattlefieldSize.X * 0.5f - 1.0f, 0.0f),
             Mathf.Max(_playableBattlefieldSize.Y * 0.5f - 1.0f, 0.0f));
+        GetNode<RtsCameraController>("CameraRig").ApplyBattlefieldView(
+            panLimits,
+            _battlefieldConfiguration.CameraPanSpeed,
+            _battlefieldConfiguration.CameraMaximumZoom,
+            _battlefieldConfiguration.CameraStartingPosition,
+            _battlefieldConfiguration.CameraStartingZoom);
+    }
+
+    private void ApplyBattlefieldConfiguration(
+        BattlefieldConfiguration configuration)
+    {
+        _battlefieldConfiguration = configuration;
+        _playableBattlefieldSize = configuration.PlayableSize;
+        _playableBattlefieldBounds = new Rect2(
+            -configuration.PlayableSize * 0.5f,
+            configuration.PlayableSize);
+
+        BoxMesh groundMesh = (BoxMesh)GetNode<MeshInstance3D>("Ground").Mesh;
+        groundMesh.Size = new Vector3(
+            configuration.VisibleGroundSize.X,
+            groundMesh.Size.Y,
+            configuration.VisibleGroundSize.Y);
+        BoxShape3D groundShape = (BoxShape3D)GetNode<CollisionShape3D>(
+            "GroundClickSurface/CollisionShape3D").Shape;
+        groundShape.Size = new Vector3(
+            configuration.VisibleGroundSize.X,
+            groundShape.Size.Y,
+            configuration.VisibleGroundSize.Y);
+
+        NavigationMesh navigationMesh = _navigationRegion.NavigationMesh;
+        Vector2 halfSize = configuration.PlayableSize * 0.5f;
+        navigationMesh.Vertices = new Vector3[]
+        {
+            new(-halfSize.X, 0.0f, halfSize.Y),
+            new(halfSize.X, 0.0f, halfSize.Y),
+            new(halfSize.X, 0.0f, -halfSize.Y),
+            new(-halfSize.X, 0.0f, -halfSize.Y),
+        };
+        navigationMesh.ClearPolygons();
+        navigationMesh.AddPolygon(new int[] { 0, 1, 2, 3 });
+        navigationMesh.CellSize = configuration.NavigationCellSize;
+        ConfigureCameraBounds();
+        ConfigureFormationStressObstacles(configuration.IsFormationStressTest);
+        MovementDiagnostics.Log(
+            $"BATTLEFIELD stress={configuration.IsFormationStressTest} " +
+            $"playable={configuration.PlayableSize} " +
+            $"nav_cell={configuration.NavigationCellSize:F2} " +
+            $"camera_pan={configuration.CameraPanSpeed:F1}");
+    }
+
+    private void ConfigureFormationStressObstacles(bool enabled)
+    {
+        foreach (Node child in _formationStressObstacles.GetChildren())
+        {
+            _formationStressObstacles.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        if (!enabled)
+        {
+            return;
+        }
+
+        AddFormationStressObstacle(
+            "WesternLongBlock",
+            new Vector2(-170.0f, 70.0f),
+            new Vector2(24.0f, 180.0f));
+        AddFormationStressObstacle(
+            "SouthernLongBlock",
+            new Vector2(145.0f, -135.0f),
+            new Vector2(220.0f, 24.0f));
+        AddFormationStressObstacle(
+            "ChokeNorth",
+            new Vector2(75.0f, 205.0f),
+            new Vector2(20.0f, 150.0f));
+        AddFormationStressObstacle(
+            "ChokeSouth",
+            new Vector2(75.0f, 50.0f),
+            new Vector2(20.0f, 120.0f));
+        AddFormationStressObstacle(
+            "SouthwestBlock",
+            new Vector2(-270.0f, -205.0f),
+            new Vector2(110.0f, 24.0f));
+    }
+
+    private void AddFormationStressObstacle(
+        string name,
+        Vector2 center,
+        Vector2 horizontalSize)
+    {
+        const float height = 4.0f;
+        BoxShape3D shape = new()
+        {
+            Size = new Vector3(horizontalSize.X, height, horizontalSize.Y),
+        };
+        BoxMesh mesh = new()
+        {
+            Size = shape.Size,
+            Material = BuildingEntity.CreateMaterial(
+                new Color(0.32f, 0.31f, 0.29f, 1.0f),
+                translucent: false),
+        };
+        StaticBody3D obstacle = new()
+        {
+            Name = name,
+            Position = new Vector3(center.X, height * 0.5f, center.Y),
+            CollisionLayer = GroundCollisionMask,
+            CollisionMask = 0,
+        };
+        obstacle.AddToGroup(NavigationPathing.NavigationSourceGroup);
+        obstacle.AddChild(new CollisionShape3D
+        {
+            Name = "CollisionShape3D",
+            Shape = shape,
+        });
+        obstacle.AddChild(new MeshInstance3D
+        {
+            Name = "MeshInstance3D",
+            Mesh = mesh,
+        });
+        _formationStressObstacles.AddChild(obstacle);
     }
 
     private void EnterPlacementMode()
@@ -1362,7 +1781,7 @@ public partial class SkirmishSandbox : Node3D
         foreach (SelectableUnit unit in GetUnitsForTeam(teamFilter: null))
         {
             Vector2 unitCenter = new(unit.GlobalPosition.X, unit.GlobalPosition.Z);
-            float requiredDistance = footprintRadius + UnitPlacementRadius;
+            float requiredDistance = footprintRadius + unit.OccupancyRadius;
             if (candidateCenter.DistanceSquaredTo(unitCenter) <
                 requiredDistance * requiredDistance)
             {
@@ -1373,7 +1792,8 @@ public partial class SkirmishSandbox : Node3D
         foreach (Node child in _resourceNodes.GetChildren())
         {
             if (child is not MaterialsResourceNode resourceNode ||
-                !IsInstanceValid(resourceNode))
+                !IsInstanceValid(resourceNode) ||
+                resourceNode.IsDepleted)
             {
                 continue;
             }
@@ -1395,6 +1815,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void QueueNavigationRebuild()
     {
+        NavigationPathing.BeginMapUpdate(GetWorld3D().NavigationMap);
         if (_navigationRebuildQueued)
         {
             return;
@@ -1412,9 +1833,11 @@ public partial class SkirmishSandbox : Node3D
             NavigationMesh.ParsedGeometryType.StaticColliders;
         navigationMesh.GeometrySourceGeometryMode =
             NavigationMesh.SourceGeometryMode.GroupsExplicit;
-        navigationMesh.GeometrySourceGroupName = NavigationSourceGroup;
+        navigationMesh.GeometrySourceGroupName = NavigationPathing.NavigationSourceGroup;
         navigationMesh.GeometryCollisionMask = GroundCollisionMask;
-        navigationMesh.AgentRadius = 0.5f;
+        navigationMesh.AgentRadius = Mathf.Max(
+            GetOccupancyRadius(CombatDefinition),
+            GetOccupancyRadius(WorkerDefinition));
         navigationMesh.AgentHeight = 1.75f;
         navigationMesh.AgentMaxClimb = 0.25f;
         navigationMesh.FilterBakingAabb = new Aabb(
@@ -1427,6 +1850,29 @@ public partial class SkirmishSandbox : Node3D
                 5.0f,
                 _playableBattlefieldBounds.Size.Y));
         _navigationRegion.BakeNavigationMesh(onThread: false);
+    }
+
+    private void ProcessPendingMoveOrder()
+    {
+        if (!_hasPendingMoveOrder ||
+            _isReplacingScenario ||
+            _isMatchEnded)
+        {
+            return;
+        }
+
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0 ||
+            NavigationPathing.IsMapSynchronizing(navigationMap))
+        {
+            return;
+        }
+
+        List<SelectableUnit> units = new(_pendingMoveUnits);
+        Vector3 destination = _pendingMoveDestination;
+        _hasPendingMoveOrder = false;
+        _pendingMoveUnits.Clear();
+        IssueMoveOrder(units, destination);
     }
 
     private void UpdateDebugOverlay()
@@ -1465,7 +1911,7 @@ public partial class SkirmishSandbox : Node3D
             $"({Mathf.RoundToInt(Mathf.Clamp(ConstructionRefundFraction, 0.0f, 1.0f) * 100.0f)}% refund)\n" +
             "X cancel newest queue | R restart after result\n" +
             "WASD/arrows pan | Wheel zoom\n" +
-            "Debug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500\n" +
+            "Debug: F1 8 | F2 20 | F3 100 | F4 250 | F5 500 large-map\n" +
             "F6 economy test | F7 reset complete MVP";
     }
 
@@ -1748,7 +2194,7 @@ public partial class SkirmishSandbox : Node3D
             FindResourceAtScreenPosition(screenPosition);
         if (resourceTarget is not null)
         {
-            IssueGatherOrder(resourceTarget);
+            IssueResourceOrder(resourceTarget);
             return;
         }
 
@@ -1768,6 +2214,17 @@ public partial class SkirmishSandbox : Node3D
                      completedBuilding.AcceptsMaterials)
             {
                 IssueManualDropOffOrder(completedBuilding);
+            }
+            else if (_selectedBuilding is not null &&
+                     _selectedBuilding.Team == UnitTeam.Friendly &&
+                     _selectedBuilding.IsComplete &&
+                     _selectedBuilding.HasProduction)
+            {
+                TrySetSelectedBuildingRallyPoint(screenPosition);
+            }
+            else
+            {
+                TryIssueMoveOrder(screenPosition);
             }
 
             return;
@@ -1803,6 +2260,7 @@ public partial class SkirmishSandbox : Node3D
 
     private void IssueAttackOrder(ICombatTarget target)
     {
+        CancelFormationPlan();
         PruneInvalidSelection();
         foreach (SelectableUnit unit in _selectedUnits)
         {
@@ -1813,17 +2271,26 @@ public partial class SkirmishSandbox : Node3D
         }
     }
 
-    private void IssueGatherOrder(MaterialsResourceNode resourceTarget)
+    private void IssueResourceOrder(MaterialsResourceNode resourceTarget)
     {
+        CancelFormationPlan();
         PruneInvalidSelection();
         List<SelectableUnit> workers = new();
+        List<SelectableUnit> combatUnits = new();
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (IsInstanceValid(unit) &&
-                unit.Team == UnitTeam.Friendly &&
-                unit.HasWorkerEconomy)
+            if (!IsInstanceValid(unit) || unit.Team != UnitTeam.Friendly)
+            {
+                continue;
+            }
+
+            if (unit.HasWorkerEconomy)
             {
                 workers.Add(unit);
+            }
+            else if (unit.CanAttack)
+            {
+                combatUnits.Add(unit);
             }
         }
 
@@ -1831,34 +2298,56 @@ public partial class SkirmishSandbox : Node3D
             first.GetInstanceId().CompareTo(second.GetInstanceId()));
         for (int index = 0; index < workers.Count; index++)
         {
-            workers[index].SetGatherTarget(resourceTarget, index, workers.Count);
+            workers[index].SetGatherTarget(resourceTarget);
         }
+
+        IssueAdjacentMoveOrder(
+            combatUnits,
+            resourceTarget.GlobalPosition,
+            resourceTarget.InteractionRadius,
+            workers.Count);
     }
 
     private void IssueManualDropOffOrder(BuildingEntity building)
     {
+        CancelFormationPlan();
         PruneInvalidSelection();
-        List<SelectableUnit> workers = new();
+        List<SelectableUnit> depositingWorkers = new();
+        List<SelectableUnit> ordinaryMovers = new();
         foreach (SelectableUnit unit in _selectedUnits)
         {
-            if (IsInstanceValid(unit) &&
-                unit.Team == UnitTeam.Friendly &&
-                unit.HasWorkerEconomy)
+            if (!IsInstanceValid(unit) || unit.Team != UnitTeam.Friendly)
             {
-                workers.Add(unit);
+                continue;
+            }
+
+            if (unit.HasWorkerEconomy && unit.CarriedMaterials > 0)
+            {
+                depositingWorkers.Add(unit);
+            }
+            else
+            {
+                ordinaryMovers.Add(unit);
             }
         }
 
-        workers.Sort((first, second) =>
+        depositingWorkers.Sort((first, second) =>
             first.GetInstanceId().CompareTo(second.GetInstanceId()));
-        for (int index = 0; index < workers.Count; index++)
+        for (int index = 0; index < depositingWorkers.Count; index++)
         {
-            workers[index].SetManualDropOff(building, index, workers.Count);
+            depositingWorkers[index].SetManualDropOff(building);
         }
+
+        IssueAdjacentMoveOrder(
+            ordinaryMovers,
+            building.GlobalPosition,
+            building.TargetRadius,
+            depositingWorkers.Count);
     }
 
     private void IssueConstructionOrder(BuildingEntity constructionSite)
     {
+        CancelFormationPlan();
         SelectableUnit builder = FindClosestSelectedWorker(
             constructionSite.GlobalPosition);
         builder?.SetConstructionTarget(constructionSite);
@@ -1911,46 +2400,1020 @@ public partial class SkirmishSandbox : Node3D
             return;
         }
 
+        IssueMoveOrder(_selectedUnits, commandDestination);
+    }
+
+    private void IssueMoveOrder(
+        IReadOnlyList<SelectableUnit> requestedUnits,
+        Vector3 commandDestination)
+    {
+        List<SelectableUnit> units = GetCommandableUnits(requestedUnits);
+        if (units.Count == 0)
+        {
+            return;
+        }
+
+        CancelFormationPlan();
+
         Rid navigationMap = GetWorld3D().NavigationMap;
         if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
         {
             return;
         }
 
-        if (_selectedUnits.Count == 1)
+        if (NavigationPathing.IsMapSynchronizing(navigationMap))
         {
-            Vector3 navigationDestination = NavigationServer3D.MapGetClosestPoint(
+            _pendingMoveUnits.Clear();
+            _pendingMoveUnits.AddRange(units);
+            _pendingMoveDestination = commandDestination;
+            _hasPendingMoveOrder = true;
+            return;
+        }
+
+        FormationMovePlanner planner = new(new FormationMovePlanner.Settings
+        {
+            ClusterLinkDistance = FormationClusterLinkDistance,
+            RobustRadiusPercentile = FormationRobustRadiusPercentile,
+            ShortDistanceRadiusMultiplier =
+                FormationShortDistanceRadiusMultiplier,
+            LongDistanceRadiusMultiplier = FormationLongDistanceRadiusMultiplier,
+            LongReorientationAngleDegrees =
+                FormationLongReorientationAngleDegrees,
+            ArrivalTransitionRadiusMultiplier =
+                FormationArrivalTransitionRadiusMultiplier,
+            TopologyCompactnessThreshold =
+                FormationTopologyCompactnessThreshold,
+            SlotSeparationMargin = MoveDestinationPadding,
+            DefaultOrientation = Vector2.Up,
+        });
+        ulong planningStartedMicroseconds = Time.GetTicksUsec();
+        FormationMovePlanner.CommandPlan plan = planner.CreatePlan(
+            units,
+            commandDestination,
+            _playableBattlefieldBounds,
+            navigationMap,
+            GetStoredFormationHeading);
+        ulong planningMicroseconds = Time.GetTicksUsec() -
+            planningStartedMicroseconds;
+        ulong planSerial = _formationPlanSerial;
+        MovementDiagnostics.Log(
+            $"COMMAND plan={planSerial} units={plan.Units.Count} " +
+            $"click=({commandDestination.X:F2},{commandDestination.Z:F2}) " +
+            $"source_clusters={plan.SourceClusters.Count} " +
+            $"sizes={FormatClusterSizes(plan.SourceClusters)} " +
+            $"decision={(plan.UsesDirectTranslation ? "short_translation" : "unified_lattice")} " +
+            $"class={plan.DistanceClass} dispersion={plan.DispersionRatio:F2} " +
+            $"compact_threshold={FormationTopologyCompactnessThreshold:F2} " +
+            $"source_footprint={FormatHorizontal(plan.SourceFootprintSize)} " +
+            $"compact_footprint={FormatHorizontal(plan.CompactFootprintSize)} " +
+            $"planning_us={planningMicroseconds}");
+        if (!plan.UsesDirectTranslation)
+        {
+            MovementDiagnostics.Log(
+                $"FORMATION plan={planSerial} grid={plan.GridColumns}x{plan.GridRows} " +
+                $"spacing={plan.GridSpacing:F2} " +
+                $"grid_centroid={FormatHorizontal(plan.GridCentroid)} " +
+                $"orientation={FormatHorizontal(plan.GridOrientation)} " +
+                $"assigned_centroid={FormatHorizontal(plan.AssignedSlotCentroid)} " +
+                $"largest_adjacency_gap={plan.LargestAdjacencyGap:F2} " +
+                $"target={FormatHorizontal(plan.TargetCentroid)} " +
+                $"approach={FormatHorizontal(plan.ApproachCentroid)} " +
+                $"heading={FormatHorizontal(plan.ArrivalHeading)} " +
+                $"transition={plan.HasArrivalTransition}");
+        }
+
+        for (int clusterIndex = 0;
+             clusterIndex < plan.SourceClusters.Count;
+             clusterIndex++)
+        {
+            FormationMovePlanner.SourceClusterSummary cluster =
+                plan.SourceClusters[clusterIndex];
+            MovementDiagnostics.Log(
+                $"SOURCE_CLUSTER plan={planSerial} index={clusterIndex} " +
+                $"units={cluster.UnitCount} radius={cluster.RobustRadius:F2} " +
+                $"source={FormatHorizontal(cluster.SourceCentroid)} " +
+                $"assigned_centroid={FormatHorizontal(cluster.AssignedSlotCentroid)} " +
+                $"assigned_bounds={FormatBounds(cluster.AssignedSlotBounds)}");
+        }
+
+        if (plan.HasArrivalTransition)
+        {
+            _formationTransitions.Add(new FormationArrivalTransition
+            {
+                PlanSerial = planSerial,
+                Units = new List<SelectableUnit>(plan.Units),
+                FinalDestinations = new List<Vector3>(
+                    plan.FinalDestinations),
+                ApproachCentroid = plan.ApproachCentroid,
+                ArrivalHeading = plan.ArrivalHeading,
+                TriggerDistance = Mathf.Max(
+                    plan.RobustRadius * 0.35f,
+                    2.0f),
+            });
+        }
+
+        if (plan.Units.Count == 0 || plan.InitialDestinations.Count == 0)
+        {
+            foreach (SelectableUnit unit in units)
+            {
+                unit.CancelCurrentOrder();
+            }
+
+            return;
+        }
+
+        StartMovementDiagnostic(planSerial, plan.Units);
+        IssuePreassignedDestinations(
+            plan.Units,
+            plan.InitialDestinations,
+            "travel",
+            preserveExistingTopologySpacing: plan.UsesDirectTranslation);
+    }
+
+    private void IssueAdjacentMoveOrder(
+        IReadOnlyList<SelectableUnit> requestedUnits,
+        Vector3 targetPosition,
+        float targetRadius,
+        int ordinalOffset)
+    {
+        List<SelectableUnit> units = GetCommandableUnits(requestedUnits);
+        if (units.Count == 0)
+        {
+            return;
+        }
+
+        CancelFormationPlan();
+
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0)
+        {
+            return;
+        }
+
+        float maximumRadius = GetMaximumOccupancyRadius(units);
+        float minimumSpacing = maximumRadius * 2.0f +
+            Mathf.Max(MoveDestinationPadding, 0.0f);
+        HashSet<ulong> commandedUnitIds = CreateUnitIdSet(units);
+        Dictionary<Vector2I, List<Vector2>> occupiedCandidateCells = new();
+        List<Vector3> candidates = new(
+            Mathf.Min(
+                units.Count + AdditionalDestinationCandidates,
+                MaximumDestinationCandidates));
+        int ordinal = Mathf.Max(ordinalOffset, 0);
+        int maximumAttempts = ordinal +
+            Mathf.Min(
+                units.Count * 8 + AdditionalDestinationCandidates,
+                MaximumDestinationCandidates);
+        int desiredCandidateCount = Mathf.Min(
+            units.Count + AdditionalDestinationCandidates,
+            MaximumDestinationCandidates);
+        while (candidates.Count < desiredCandidateCount &&
+               ordinal < maximumAttempts)
+        {
+            Vector3 requested = InteractionPositioning.GetRadialPosition(
+                targetPosition,
+                targetRadius,
+                maximumRadius,
+                ordinal,
+                float.MaxValue,
+                out _);
+            ordinal++;
+            Vector3 projected = NavigationServer3D.MapGetClosestPoint(
                 navigationMap,
-                commandDestination);
-            _selectedUnits[0].SetMoveTarget(navigationDestination);
+                requested);
+            Vector2 projectionDelta = new(
+                requested.X - projected.X,
+                requested.Z - projected.Z);
+            if (projectionDelta.LengthSquared() >
+                    maximumRadius * maximumRadius ||
+                !IsCandidateDestinationValid(
+                    projected,
+                    maximumRadius,
+                    commandedUnitIds,
+                    target: null))
+            {
+                continue;
+            }
+
+            if (TryReserveDestinationCandidate(
+                    occupiedCandidateCells,
+                    projected,
+                    minimumSpacing))
+            {
+                candidates.Add(projected);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
             return;
         }
 
-        float minimumSpacing = Mathf.Max(MinimumMoveDestinationSpacing, 0.1f);
-        List<Vector2> offsets = CalculateHorizontalOffsets(_selectedUnits);
-        if (!TryRepairMinimumSpacing(offsets, minimumSpacing, out offsets))
+        IssueReachableDestinations(units, candidates);
+    }
+
+    private static List<SelectableUnit> GetCommandableUnits(
+        IReadOnlyList<SelectableUnit> requestedUnits)
+    {
+        List<SelectableUnit> units = new(requestedUnits.Count);
+        foreach (SelectableUnit unit in requestedUnits)
         {
-            GD.PushWarning("Unable to create separated movement destinations for the selected group.");
+            if (IsInstanceValid(unit) &&
+                !unit.IsQueuedForDeletion() &&
+                unit.IsAlive &&
+                unit.Team == UnitTeam.Friendly)
+            {
+                units.Add(unit);
+            }
+        }
+
+        return units;
+    }
+
+    private static float GetMaximumOccupancyRadius(
+        IReadOnlyList<SelectableUnit> units)
+    {
+        float maximumRadius = 0.1f;
+        foreach (SelectableUnit unit in units)
+        {
+            maximumRadius = Mathf.Max(maximumRadius, unit.OccupancyRadius);
+        }
+
+        return maximumRadius;
+    }
+
+    private void IssuePreassignedDestinations(
+        IReadOnlyList<SelectableUnit> units,
+        IReadOnlyList<Vector3> intendedDestinations,
+        string diagnosticPhase,
+        bool preserveExistingTopologySpacing = false)
+    {
+        CancelMoveCommandBatch();
+        if (units.Count == 0 || units.Count != intendedDestinations.Count)
+        {
             return;
         }
 
-        Vector2 requestedCentroid = new(commandDestination.X, commandDestination.Z);
-        if (!TryCreateProjectedDestinations(
-                navigationMap,
-                requestedCentroid,
-                commandDestination.Y,
-                offsets,
-                minimumSpacing,
-                out List<Vector3> navigationDestinations))
+        foreach (SelectableUnit unit in units)
         {
-            GD.PushWarning("Unable to fit separated movement destinations on navigable ground.");
+            unit.CancelCurrentOrder();
+        }
+
+        HashSet<ulong> commandedUnitIds = CreateUnitIdSet(units);
+        float maximumRadius = GetMaximumOccupancyRadius(units);
+        float minimumSpacing = maximumRadius * 2.0f +
+            Mathf.Max(MoveDestinationPadding, 0.0f);
+        Dictionary<Vector2I, List<Vector2>> occupiedCandidateCells = new();
+        List<Vector3> candidates = new(units.Count);
+        int[] preferredCandidateIndices = new int[units.Count];
+        System.Array.Fill(preferredCandidateIndices, -1);
+        int repairedDestinations = 0;
+        int rejectedDestinations = 0;
+        for (int index = 0; index < units.Count; index++)
+        {
+            if (!TryCreateStableFormationDestination(
+                    units[index],
+                    intendedDestinations[index],
+                    minimumSpacing,
+                    commandedUnitIds,
+                    occupiedCandidateCells,
+                    preserveExistingTopologySpacing,
+                    out Vector3 destination))
+            {
+                rejectedDestinations++;
+                continue;
+            }
+
+            Vector2 intendedHorizontal = new(
+                intendedDestinations[index].X,
+                intendedDestinations[index].Z);
+            Vector2 actualHorizontal = new(destination.X, destination.Z);
+            if (intendedHorizontal.DistanceSquaredTo(actualHorizontal) > 0.0025f)
+            {
+                repairedDestinations++;
+            }
+
+            preferredCandidateIndices[index] = candidates.Count;
+            candidates.Add(destination);
+        }
+
+        if (candidates.Count == 0)
+        {
+            MovementDiagnostics.Log(
+                $"SLOTS plan={_formationPlanSerial} phase={diagnosticPhase} " +
+                $"accepted=0 repaired={repairedDestinations} " +
+                $"rejected={rejectedDestinations}");
             return;
         }
 
-        for (int index = 0; index < _selectedUnits.Count; index++)
+        MovementDiagnostics.Log(
+            $"SLOTS plan={_formationPlanSerial} phase={diagnosticPhase} " +
+            $"accepted={candidates.Count} repaired={repairedDestinations} " +
+            $"rejected={rejectedDestinations}");
+
+        BeginMoveCommandBatch(
+            units,
+            candidates,
+            CreateTopologyUnitOrder(units),
+            preferredCandidateIndices);
+    }
+
+    private bool TryCreateStableFormationDestination(
+        SelectableUnit unit,
+        Vector3 intendedDestination,
+        float minimumSpacing,
+        IReadOnlySet<ulong> commandedUnitIds,
+        IDictionary<Vector2I, List<Vector2>> occupiedCandidateCells,
+        bool preserveExistingTopologySpacing,
+        out Vector3 destination)
+    {
+        const int maximumRepairRings = 16;
+        Rect2 safeBounds = _playableBattlefieldBounds.Grow(
+            -unit.OccupancyRadius);
+        Vector2 intendedHorizontal = new(
+            intendedDestination.X,
+            intendedDestination.Z);
+        intendedHorizontal = new Vector2(
+            Mathf.Clamp(
+                intendedHorizontal.X,
+                safeBounds.Position.X,
+                safeBounds.End.X),
+            Mathf.Clamp(
+                intendedHorizontal.Y,
+                safeBounds.Position.Y,
+                safeBounds.End.Y));
+
+        for (int ring = 0; ring <= maximumRepairRings; ring++)
         {
-            _selectedUnits[index].SetMoveTarget(navigationDestinations[index]);
+            int minimumOffset = -ring;
+            int maximumOffset = ring;
+            for (int x = minimumOffset; x <= maximumOffset; x++)
+            {
+                for (int z = minimumOffset; z <= maximumOffset; z++)
+                {
+                    if (ring > 0 &&
+                        Mathf.Max(Mathf.Abs(x), Mathf.Abs(z)) != ring)
+                    {
+                        continue;
+                    }
+
+                    Vector2 requestedHorizontal = intendedHorizontal +
+                        new Vector2(x * minimumSpacing, z * minimumSpacing);
+                    if (!safeBounds.HasPoint(requestedHorizontal))
+                    {
+                        continue;
+                    }
+
+                    Vector3 requested = new(
+                        requestedHorizontal.X,
+                        intendedDestination.Y,
+                        requestedHorizontal.Y);
+                    if (!IsCandidateDestinationValid(
+                            requested,
+                            unit.OccupancyRadius,
+                            commandedUnitIds,
+                            target: null))
+                    {
+                        continue;
+                    }
+
+                    if (preserveExistingTopologySpacing && ring == 0)
+                    {
+                        RecordDestinationCandidate(
+                            occupiedCandidateCells,
+                            requested,
+                            minimumSpacing);
+                    }
+                    else if (!TryReserveDestinationCandidate(
+                                 occupiedCandidateCells,
+                                 requested,
+                                 minimumSpacing))
+                    {
+                        continue;
+                    }
+
+                    destination = requested;
+                    destination.Y = unit.GlobalPosition.Y;
+                    return true;
+                }
+            }
         }
+
+        destination = unit.GlobalPosition;
+        return false;
+    }
+
+    private void IssueReachableDestinations(
+        IReadOnlyList<SelectableUnit> units,
+        IReadOnlyList<Vector3> candidates)
+    {
+        CancelMoveCommandBatch();
+        foreach (SelectableUnit unit in units)
+        {
+            unit.CancelCurrentOrder();
+        }
+
+        int preferredCount = Mathf.Min(units.Count, candidates.Count);
+        List<Vector3> preferredPositions = new(preferredCount);
+        for (int index = 0; index < preferredCount; index++)
+        {
+            preferredPositions.Add(candidates[index]);
+        }
+
+        List<int> unitOrder = CreateTopologyUnitOrder(units);
+        preferredPositions.Sort((first, second) =>
+        {
+            int xComparison = first.X.CompareTo(second.X);
+            return xComparison != 0
+                ? xComparison
+                : first.Z.CompareTo(second.Z);
+        });
+
+        Dictionary<Vector3, int> candidateIndices = new();
+        for (int index = 0; index < candidates.Count; index++)
+        {
+            candidateIndices[candidates[index]] = index;
+        }
+
+        int[] preferredCandidateIndices = new int[units.Count];
+        System.Array.Fill(preferredCandidateIndices, -1);
+        for (int rank = 0; rank < preferredCount; rank++)
+        {
+            int unitIndex = unitOrder[rank];
+            if (candidateIndices.TryGetValue(
+                    preferredPositions[rank],
+                    out int candidateIndex))
+            {
+                preferredCandidateIndices[unitIndex] = candidateIndex;
+            }
+        }
+
+        BeginMoveCommandBatch(
+            units,
+            candidates,
+            unitOrder,
+            preferredCandidateIndices);
+    }
+
+    private void BeginMoveCommandBatch(
+        IReadOnlyList<SelectableUnit> units,
+        IReadOnlyList<Vector3> candidates,
+        List<int> unitOrder,
+        int[] preferredCandidateIndices)
+    {
+        _moveCommandSerial++;
+        _moveCommandBatch = new MoveCommandBatch
+        {
+            Serial = _moveCommandSerial,
+            Units = new List<SelectableUnit>(units),
+            Candidates = new List<Vector3>(candidates),
+            UnitOrder = unitOrder,
+            PreferredCandidateIndices = preferredCandidateIndices,
+            ClaimedCandidates = new bool[candidates.Count],
+            UnitHandled = new bool[units.Count],
+            QueryBudget = units.Count * 2 + AdditionalDestinationCandidates,
+        };
+        MovementDiagnostics.Log(
+            $"BATCH_BEGIN plan={_formationPlanSerial} " +
+            $"batch={_moveCommandSerial} units={units.Count} " +
+            $"candidates={candidates.Count} " +
+            $"per_frame={Mathf.Max(MovePathQueriesPerFrame, 1)} " +
+            $"query_budget={_moveCommandBatch.QueryBudget}");
+        ProcessMoveCommandBatch();
+    }
+
+    private void ProcessMoveCommandBatch()
+    {
+        MoveCommandBatch batch = _moveCommandBatch;
+        if (batch is null ||
+            batch.Serial != _moveCommandSerial ||
+            _isReplacingScenario ||
+            _isMatchEnded)
+        {
+            return;
+        }
+
+        Rid navigationMap = GetWorld3D().NavigationMap;
+        if (NavigationServer3D.MapGetIterationId(navigationMap) == 0 ||
+            NavigationPathing.IsMapSynchronizing(navigationMap))
+        {
+            return;
+        }
+
+        int remainingQueries = Mathf.Max(MovePathQueriesPerFrame, 1);
+        while (remainingQueries > 0 && batch.QueriesUsed < batch.QueryBudget)
+        {
+            if (batch.InitialCursor < batch.UnitOrder.Count)
+            {
+                int unitIndex = batch.UnitOrder[batch.InitialCursor++];
+                SelectableUnit unit = batch.Units[unitIndex];
+                if (!IsBatchUnitValid(unit))
+                {
+                    batch.UnitHandled[unitIndex] = true;
+                    continue;
+                }
+
+                int candidateIndex = batch.PreferredCandidateIndices[unitIndex];
+                if (candidateIndex >= 0 &&
+                    !batch.ClaimedCandidates[candidateIndex])
+                {
+                    batch.QueriesUsed++;
+                    remainingQueries--;
+                    if (NavigationPathing.TryResolveReachablePoint(
+                            unit,
+                            batch.Candidates[candidateIndex],
+                            unit.OccupancyRadius,
+                            out Vector3 reachable))
+                    {
+                        batch.ClaimedCandidates[candidateIndex] = true;
+                        batch.UnitHandled[unitIndex] = true;
+                        unit.SetValidatedMoveTarget(reachable);
+                        continue;
+                    }
+                }
+
+                batch.RetryUnits.Enqueue(unitIndex);
+                continue;
+            }
+
+            if (batch.CurrentRetryUnit < 0)
+            {
+                if (batch.RetryUnits.Count == 0)
+                {
+                    CompleteMoveCommandBatch(batch);
+                    return;
+                }
+
+                batch.CurrentRetryUnit = batch.RetryUnits.Dequeue();
+                batch.RetryCandidateCursor = 0;
+            }
+
+            int retryUnitIndex = batch.CurrentRetryUnit;
+            SelectableUnit retryUnit = batch.Units[retryUnitIndex];
+            if (!IsBatchUnitValid(retryUnit))
+            {
+                batch.UnitHandled[retryUnitIndex] = true;
+                batch.CurrentRetryUnit = -1;
+                continue;
+            }
+
+            bool queryIssued = false;
+            while (batch.RetryCandidateCursor < batch.Candidates.Count)
+            {
+                int candidateIndex = batch.RetryCandidateCursor++;
+                if (batch.ClaimedCandidates[candidateIndex])
+                {
+                    continue;
+                }
+
+                batch.QueriesUsed++;
+                remainingQueries--;
+                queryIssued = true;
+                if (NavigationPathing.TryResolveReachablePoint(
+                        retryUnit,
+                        batch.Candidates[candidateIndex],
+                        retryUnit.OccupancyRadius,
+                        out Vector3 reachable))
+                {
+                    batch.ClaimedCandidates[candidateIndex] = true;
+                    batch.UnitHandled[retryUnitIndex] = true;
+                    retryUnit.SetValidatedMoveTarget(reachable);
+                    batch.CurrentRetryUnit = -1;
+                }
+
+                break;
+            }
+
+            if (!queryIssued ||
+                batch.RetryCandidateCursor >= batch.Candidates.Count)
+            {
+                if (!batch.UnitHandled[retryUnitIndex])
+                {
+                    retryUnit.CancelCurrentOrder();
+                    batch.UnitHandled[retryUnitIndex] = true;
+                }
+
+                batch.CurrentRetryUnit = -1;
+            }
+        }
+
+        if (batch.QueriesUsed >= batch.QueryBudget)
+        {
+            CompleteMoveCommandBatch(batch);
+        }
+    }
+
+    private void CompleteMoveCommandBatch(MoveCommandBatch batch)
+    {
+        int handledUnits = 0;
+        for (int index = 0; index < batch.Units.Count; index++)
+        {
+            if (batch.UnitHandled[index])
+            {
+                handledUnits++;
+            }
+
+            if (!batch.UnitHandled[index] && IsBatchUnitValid(batch.Units[index]))
+            {
+                batch.Units[index].CancelCurrentOrder();
+            }
+        }
+
+        if (_moveCommandBatch == batch)
+        {
+            _moveCommandBatch = null!;
+        }
+
+        MovementDiagnostics.Log(
+            $"BATCH_COMPLETE plan={_formationPlanSerial} batch={batch.Serial} " +
+            $"handled={handledUnits}/{batch.Units.Count} " +
+            $"queries={batch.QueriesUsed} retries={batch.RetryUnits.Count}");
+    }
+
+    private void CancelMoveCommandBatch()
+    {
+        if (_moveCommandBatch is not null)
+        {
+            MovementDiagnostics.Log(
+                $"BATCH_CANCEL plan={_formationPlanSerial} " +
+                $"batch={_moveCommandBatch.Serial} " +
+                $"cursor={_moveCommandBatch.InitialCursor}/" +
+                $"{_moveCommandBatch.UnitOrder.Count} " +
+                $"queries={_moveCommandBatch.QueriesUsed}");
+        }
+
+        _moveCommandSerial++;
+        _moveCommandBatch = null!;
+    }
+
+    private void CancelFormationPlan()
+    {
+        if (_movementDiagnosticCommand is not null)
+        {
+            ulong elapsed = Time.GetTicksMsec() -
+                _movementDiagnosticCommand.StartedMilliseconds;
+            MovementDiagnostics.Log(
+                $"COMMAND_CANCEL plan={_movementDiagnosticCommand.PlanSerial} " +
+                $"elapsed_ms={elapsed}");
+            _movementDiagnosticCommand = null!;
+        }
+
+        _formationPlanSerial++;
+        _formationTransitions.Clear();
+        CancelMoveCommandBatch();
+    }
+
+    private void ProcessFormationArrivalTransitions()
+    {
+        if (_moveCommandBatch is not null ||
+            _formationTransitions.Count == 0 ||
+            _isReplacingScenario ||
+            _isMatchEnded)
+        {
+            return;
+        }
+
+        for (int transitionIndex = _formationTransitions.Count - 1;
+             transitionIndex >= 0;
+             transitionIndex--)
+        {
+            FormationArrivalTransition transition =
+                _formationTransitions[transitionIndex];
+            if (transition.PlanSerial != _formationPlanSerial)
+            {
+                _formationTransitions.RemoveAt(transitionIndex);
+                continue;
+            }
+
+            Vector2 centroid = Vector2.Zero;
+            int validUnitCount = 0;
+            for (int unitIndex = 0;
+                 unitIndex < transition.Units.Count;
+                 unitIndex++)
+            {
+                SelectableUnit unit = transition.Units[unitIndex];
+                if (!IsBatchUnitValid(unit) ||
+                    unit.CurrentCombatTarget is not null)
+                {
+                    continue;
+                }
+
+                centroid += new Vector2(
+                    unit.GlobalPosition.X,
+                    unit.GlobalPosition.Z);
+                validUnitCount++;
+            }
+
+            if (validUnitCount == 0)
+            {
+                _formationTransitions.RemoveAt(transitionIndex);
+                continue;
+            }
+
+            centroid /= validUnitCount;
+            if (centroid.DistanceSquaredTo(transition.ApproachCentroid) >
+                    transition.TriggerDistance * transition.TriggerDistance)
+            {
+                continue;
+            }
+
+            List<SelectableUnit> transitionUnits = new(validUnitCount);
+            List<Vector3> transitionDestinations = new(validUnitCount);
+            for (int unitIndex = 0;
+                 unitIndex < transition.Units.Count;
+                 unitIndex++)
+            {
+                SelectableUnit unit = transition.Units[unitIndex];
+                if (!IsBatchUnitValid(unit) ||
+                    unit.CurrentCombatTarget is not null)
+                {
+                    continue;
+                }
+
+                transitionUnits.Add(unit);
+                transitionDestinations.Add(
+                    transition.FinalDestinations[unitIndex]);
+                _formationHeadings[unit.GetInstanceId()] =
+                    transition.ArrivalHeading;
+            }
+
+            _formationTransitions.RemoveAt(transitionIndex);
+            MovementDiagnostics.Log(
+                $"TRANSITION plan={transition.PlanSerial} " +
+                $"units={transitionUnits.Count} " +
+                $"centroid={FormatHorizontal(centroid)} " +
+                $"approach={FormatHorizontal(transition.ApproachCentroid)} " +
+                $"heading={FormatHorizontal(transition.ArrivalHeading)}");
+            IssuePreassignedDestinations(
+                transitionUnits,
+                transitionDestinations,
+                "arrival");
+            return;
+        }
+    }
+
+    private Vector2 GetStoredFormationHeading(SelectableUnit unit)
+    {
+        return _formationHeadings.TryGetValue(
+            unit.GetInstanceId(),
+            out Vector2 heading) &&
+            heading.LengthSquared() > 0.0001f
+                ? heading.Normalized()
+                : Vector2.Up;
+    }
+
+    private void StartMovementDiagnostic(
+        ulong planSerial,
+        IReadOnlyList<SelectableUnit> units)
+    {
+        if (!MovementDiagnostics.Enabled)
+        {
+            return;
+        }
+
+        ulong now = Time.GetTicksMsec();
+        _movementDiagnosticCommand = new MovementDiagnosticCommand
+        {
+            PlanSerial = planSerial,
+            Units = new List<SelectableUnit>(units),
+            StartedMilliseconds = now,
+            LastStatusMilliseconds = now,
+        };
+    }
+
+    private void ProcessMovementDiagnostic()
+    {
+        if (_movementDiagnosticCommand is null || !MovementDiagnostics.Enabled)
+        {
+            return;
+        }
+
+        MovementDiagnosticCommand command = _movementDiagnosticCommand;
+        if (command.PlanSerial != _formationPlanSerial)
+        {
+            _movementDiagnosticCommand = null!;
+            return;
+        }
+
+        int livingUnits = 0;
+        int movingUnits = 0;
+        foreach (SelectableUnit unit in command.Units)
+        {
+            if (!IsInstanceValid(unit) ||
+                unit.IsQueuedForDeletion() ||
+                !unit.IsAlive)
+            {
+                continue;
+            }
+
+            livingUnits++;
+            if (unit.IsMovingForOccupancy)
+            {
+                movingUnits++;
+            }
+        }
+
+        int pendingTransitions = 0;
+        foreach (FormationArrivalTransition transition in _formationTransitions)
+        {
+            if (transition.PlanSerial == command.PlanSerial)
+            {
+                pendingTransitions++;
+            }
+        }
+
+        ulong now = Time.GetTicksMsec();
+        ulong elapsed = now - command.StartedMilliseconds;
+        bool batchActive = _moveCommandBatch is not null;
+        if (movingUnits == 0 && pendingTransitions == 0 && !batchActive)
+        {
+            MovementDiagnostics.Log(
+                $"SETTLED plan={command.PlanSerial} elapsed_ms={elapsed} " +
+                $"living={livingUnits}");
+            _movementDiagnosticCommand = null!;
+            return;
+        }
+
+        if (now - command.LastStatusMilliseconds < 1000)
+        {
+            return;
+        }
+
+        command.LastStatusMilliseconds = now;
+        MovementDiagnostics.Log(
+            $"STATUS plan={command.PlanSerial} elapsed_ms={elapsed} " +
+            $"moving={movingUnits}/{livingUnits} " +
+            $"transitions={pendingTransitions} batch={batchActive}");
+    }
+
+    private static string FormatHorizontal(Vector2 value)
+    {
+        return $"({value.X:F2},{value.Y:F2})";
+    }
+
+    private static string FormatBounds(Rect2 bounds)
+    {
+        return $"{FormatHorizontal(bounds.Position)}-" +
+            $"{FormatHorizontal(bounds.End)}";
+    }
+
+    private static string FormatClusterSizes(
+        IReadOnlyList<FormationMovePlanner.SourceClusterSummary> clusters)
+    {
+        if (clusters.Count == 0)
+        {
+            return "[]";
+        }
+
+        string result = "[";
+        for (int index = 0; index < clusters.Count; index++)
+        {
+            if (index > 0)
+            {
+                result += ",";
+            }
+
+            result += clusters[index].UnitCount;
+        }
+
+        return result + "]";
+    }
+
+    private static bool IsBatchUnitValid(SelectableUnit unit)
+    {
+        return IsInstanceValid(unit) &&
+            !unit.IsQueuedForDeletion() &&
+            unit.IsAlive &&
+            unit.Team == UnitTeam.Friendly;
+    }
+
+    private bool IsCandidateDestinationValid(
+        Vector3 position,
+        float occupancyRadius,
+        IReadOnlySet<ulong> commandedUnitIds,
+        GodotObject target)
+    {
+        Vector2 horizontal = new(position.X, position.Z);
+        if (!_playableBattlefieldBounds.Grow(-occupancyRadius)
+                .HasPoint(horizontal) ||
+            !NavigationPathing.IsClearOfStaticFootprints(
+                GetTree(),
+                position,
+                occupancyRadius,
+                target))
+        {
+            return false;
+        }
+
+        return !_unitOccupancySystem.IsPositionOccupied(
+            position,
+            occupancyRadius + Mathf.Max(MoveDestinationPadding, 0.0f),
+            excludedUnitIds: commandedUnitIds);
+    }
+
+    private static HashSet<ulong> CreateUnitIdSet(
+        IReadOnlyList<SelectableUnit> units)
+    {
+        HashSet<ulong> unitIds = new();
+        foreach (SelectableUnit unit in units)
+        {
+            unitIds.Add(unit.GetInstanceId());
+        }
+
+        return unitIds;
+    }
+
+    private static List<int> CreateTopologyUnitOrder(
+        IReadOnlyList<SelectableUnit> units)
+    {
+        List<int> unitOrder = new(units.Count);
+        for (int index = 0; index < units.Count; index++)
+        {
+            unitOrder.Add(index);
+        }
+
+        unitOrder.Sort((first, second) =>
+        {
+            int xComparison = units[first].GlobalPosition.X.CompareTo(
+                units[second].GlobalPosition.X);
+            if (xComparison != 0)
+            {
+                return xComparison;
+            }
+
+            int zComparison = units[first].GlobalPosition.Z.CompareTo(
+                units[second].GlobalPosition.Z);
+            return zComparison != 0
+                ? zComparison
+                : units[first].GetInstanceId().CompareTo(
+                    units[second].GetInstanceId());
+        });
+        return unitOrder;
+    }
+
+    private static bool TryReserveDestinationCandidate(
+        IDictionary<Vector2I, List<Vector2>> occupiedCells,
+        Vector3 candidate,
+        float minimumSpacing)
+    {
+        Vector2 horizontal = new(candidate.X, candidate.Z);
+        float effectiveSpacing = Mathf.Max(
+            minimumSpacing - DestinationSpacingTolerance,
+            0.01f);
+        float spacingSquared = effectiveSpacing * effectiveSpacing;
+        Vector2I cell = new(
+            Mathf.FloorToInt(horizontal.X / effectiveSpacing),
+            Mathf.FloorToInt(horizontal.Y / effectiveSpacing));
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int z = -1; z <= 1; z++)
+            {
+                if (!occupiedCells.TryGetValue(
+                        cell + new Vector2I(x, z),
+                        out List<Vector2> occupiedPositions))
+                {
+                    continue;
+                }
+
+                foreach (Vector2 occupied in occupiedPositions)
+                {
+                    if (horizontal.DistanceSquaredTo(occupied) < spacingSquared)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if (!occupiedCells.TryGetValue(cell, out List<Vector2> positions))
+        {
+            positions = new List<Vector2>();
+            occupiedCells[cell] = positions;
+        }
+
+        positions.Add(horizontal);
+        return true;
+    }
+
+    private static void RecordDestinationCandidate(
+        IDictionary<Vector2I, List<Vector2>> occupiedCells,
+        Vector3 candidate,
+        float minimumSpacing)
+    {
+        Vector2 horizontal = new(candidate.X, candidate.Z);
+        float effectiveSpacing = Mathf.Max(
+            minimumSpacing - DestinationSpacingTolerance,
+            0.01f);
+        Vector2I cell = new(
+            Mathf.FloorToInt(horizontal.X / effectiveSpacing),
+            Mathf.FloorToInt(horizontal.Y / effectiveSpacing));
+        if (!occupiedCells.TryGetValue(cell, out List<Vector2> positions))
+        {
+            positions = new List<Vector2>();
+            occupiedCells[cell] = positions;
+        }
+
+        positions.Add(horizontal);
     }
 
     private bool TryGetGroundPosition(
@@ -1976,357 +3439,6 @@ public partial class SkirmishSandbox : Node3D
 
         groundPosition = hit["position"].AsVector3();
         return true;
-    }
-
-    private static List<Vector2> CalculateHorizontalOffsets(
-        IReadOnlyList<SelectableUnit> units)
-    {
-        Vector2 centroid = Vector2.Zero;
-        foreach (SelectableUnit unit in units)
-        {
-            centroid += new Vector2(unit.GlobalPosition.X, unit.GlobalPosition.Z);
-        }
-
-        centroid /= units.Count;
-        List<Vector2> offsets = new(units.Count);
-        foreach (SelectableUnit unit in units)
-        {
-            offsets.Add(new Vector2(unit.GlobalPosition.X, unit.GlobalPosition.Z) - centroid);
-        }
-
-        return offsets;
-    }
-
-    private bool TryCreateProjectedDestinations(
-        Rid navigationMap,
-        Vector2 requestedCentroid,
-        float destinationHeight,
-        List<Vector2> offsets,
-        float minimumSpacing,
-        out List<Vector3> destinations)
-    {
-        destinations = ProjectDestinations(
-            navigationMap,
-            FitCentroidInsideBattlefield(requestedCentroid, offsets, minimumSpacing),
-            destinationHeight,
-            offsets);
-        if (HasMinimumSpacing(destinations, minimumSpacing))
-        {
-            return true;
-        }
-
-        Vector2 projectedCentroid = CalculateHorizontalCentroid(destinations);
-        List<Vector2> projectedOffsets = new(destinations.Count);
-        foreach (Vector3 destination in destinations)
-        {
-            projectedOffsets.Add(
-                new Vector2(destination.X, destination.Z) - projectedCentroid);
-        }
-
-        if (!TryRepairMinimumSpacing(
-                projectedOffsets,
-                minimumSpacing,
-                out projectedOffsets))
-        {
-            return false;
-        }
-
-        destinations = ProjectDestinations(
-            navigationMap,
-            FitCentroidInsideBattlefield(
-                projectedCentroid,
-                projectedOffsets,
-                minimumSpacing),
-            destinationHeight,
-            projectedOffsets);
-        return HasMinimumSpacing(destinations, minimumSpacing);
-    }
-
-    private List<Vector3> ProjectDestinations(
-        Rid navigationMap,
-        Vector2 centroid,
-        float destinationHeight,
-        IReadOnlyList<Vector2> offsets)
-    {
-        List<Vector3> destinations = new(offsets.Count);
-        foreach (Vector2 offset in offsets)
-        {
-            Vector2 horizontalDestination = centroid + offset;
-            destinations.Add(NavigationServer3D.MapGetClosestPoint(
-                navigationMap,
-                new Vector3(
-                    horizontalDestination.X,
-                    destinationHeight,
-                    horizontalDestination.Y)));
-        }
-
-        return destinations;
-    }
-
-    private Vector2 FitCentroidInsideBattlefield(
-        Vector2 requestedCentroid,
-        IReadOnlyList<Vector2> offsets,
-        float minimumSpacing)
-    {
-        GetOffsetBounds(offsets, out Vector2 minimumOffset, out Vector2 maximumOffset);
-        Vector2 footprintSize = maximumOffset - minimumOffset;
-        float preferredMargin = minimumSpacing * 0.5f;
-        Vector2 availableMargin = new(
-            Mathf.Max((_playableBattlefieldBounds.Size.X - footprintSize.X) * 0.5f, 0.0f),
-            Mathf.Max((_playableBattlefieldBounds.Size.Y - footprintSize.Y) * 0.5f, 0.0f));
-        Vector2 margin = new(
-            Mathf.Min(preferredMargin, availableMargin.X),
-            Mathf.Min(preferredMargin, availableMargin.Y));
-        Vector2 minimumCentroid = _playableBattlefieldBounds.Position +
-            margin - minimumOffset;
-        Vector2 maximumCentroid = _playableBattlefieldBounds.End -
-            margin - maximumOffset;
-
-        return new Vector2(
-            Mathf.Clamp(requestedCentroid.X, minimumCentroid.X, maximumCentroid.X),
-            Mathf.Clamp(requestedCentroid.Y, minimumCentroid.Y, maximumCentroid.Y));
-    }
-
-    private static void GetOffsetBounds(
-        IReadOnlyList<Vector2> offsets,
-        out Vector2 minimum,
-        out Vector2 maximum)
-    {
-        minimum = new Vector2(float.MaxValue, float.MaxValue);
-        maximum = new Vector2(float.MinValue, float.MinValue);
-        foreach (Vector2 offset in offsets)
-        {
-            minimum = new Vector2(
-                Mathf.Min(minimum.X, offset.X),
-                Mathf.Min(minimum.Y, offset.Y));
-            maximum = new Vector2(
-                Mathf.Max(maximum.X, offset.X),
-                Mathf.Max(maximum.Y, offset.Y));
-        }
-    }
-
-    private static bool TryRepairMinimumSpacing(
-        IReadOnlyList<Vector2> intendedOffsets,
-        float minimumSpacing,
-        out List<Vector2> repairedOffsets)
-    {
-        int count = intendedOffsets.Count;
-        bool[] needsRepair = new bool[count];
-        float effectiveMinimumSpacing = Mathf.Max(
-            minimumSpacing - DestinationSpacingTolerance,
-            0.0f);
-        float minimumSpacingSquared = effectiveMinimumSpacing * effectiveMinimumSpacing;
-        bool repairNeeded = false;
-
-        for (int firstIndex = 0; firstIndex < count; firstIndex++)
-        {
-            for (int secondIndex = firstIndex + 1; secondIndex < count; secondIndex++)
-            {
-                if (intendedOffsets[firstIndex].DistanceSquaredTo(
-                        intendedOffsets[secondIndex]) >= minimumSpacingSquared)
-                {
-                    continue;
-                }
-
-                needsRepair[firstIndex] = true;
-                needsRepair[secondIndex] = true;
-                repairNeeded = true;
-            }
-        }
-
-        repairedOffsets = new List<Vector2>(intendedOffsets);
-        if (!repairNeeded)
-        {
-            return true;
-        }
-
-        Dictionary<Vector2I, List<Vector2>> occupiedCells = new();
-        bool[] assigned = new bool[count];
-        for (int index = 0; index < count; index++)
-        {
-            if (needsRepair[index])
-            {
-                continue;
-            }
-
-            AddOccupiedPosition(occupiedCells, intendedOffsets[index], minimumSpacing);
-            assigned[index] = true;
-        }
-
-        for (int index = 0; index < count; index++)
-        {
-            if (assigned[index])
-            {
-                continue;
-            }
-
-            Vector2 intended = intendedOffsets[index];
-            if (IsPositionAvailable(
-                    occupiedCells,
-                    intended,
-                    minimumSpacing,
-                    minimumSpacingSquared))
-            {
-                repairedOffsets[index] = intended;
-                AddOccupiedPosition(occupiedCells, intended, minimumSpacing);
-                continue;
-            }
-
-            bool positionFound = false;
-            for (int ring = 1; ring <= count && !positionFound; ring++)
-            {
-                for (int x = -ring; x <= ring && !positionFound; x++)
-                {
-                    for (int z = -ring; z <= ring; z++)
-                    {
-                        if (Mathf.Max(Mathf.Abs(x), Mathf.Abs(z)) != ring)
-                        {
-                            continue;
-                        }
-
-                        Vector2 candidate = intended +
-                            new Vector2(x * minimumSpacing, z * minimumSpacing);
-                        if (!IsPositionAvailable(
-                                occupiedCells,
-                                candidate,
-                                minimumSpacing,
-                                minimumSpacingSquared))
-                        {
-                            continue;
-                        }
-
-                        repairedOffsets[index] = candidate;
-                        AddOccupiedPosition(occupiedCells, candidate, minimumSpacing);
-                        positionFound = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!positionFound)
-            {
-                return false;
-            }
-        }
-
-        Vector2 intendedCentroid = CalculateHorizontalCentroid(intendedOffsets);
-        Vector2 repairedCentroid = CalculateHorizontalCentroid(repairedOffsets);
-        Vector2 recenterOffset = intendedCentroid - repairedCentroid;
-        for (int index = 0; index < repairedOffsets.Count; index++)
-        {
-            repairedOffsets[index] += recenterOffset;
-        }
-
-        return true;
-    }
-
-    private static bool IsPositionAvailable(
-        IReadOnlyDictionary<Vector2I, List<Vector2>> occupiedCells,
-        Vector2 position,
-        float cellSize,
-        float minimumSpacingSquared)
-    {
-        Vector2I cell = GetSpacingCell(position, cellSize);
-        for (int xOffset = -1; xOffset <= 1; xOffset++)
-        {
-            for (int yOffset = -1; yOffset <= 1; yOffset++)
-            {
-                Vector2I neighboringCell = cell + new Vector2I(xOffset, yOffset);
-                if (!occupiedCells.TryGetValue(
-                        neighboringCell,
-                        out List<Vector2> occupiedPositions))
-                {
-                    continue;
-                }
-
-                foreach (Vector2 occupiedPosition in occupiedPositions)
-                {
-                    if (position.DistanceSquaredTo(occupiedPosition) <
-                        minimumSpacingSquared)
-                    {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private static void AddOccupiedPosition(
-        IDictionary<Vector2I, List<Vector2>> occupiedCells,
-        Vector2 position,
-        float cellSize)
-    {
-        Vector2I cell = GetSpacingCell(position, cellSize);
-        if (!occupiedCells.TryGetValue(cell, out List<Vector2> occupiedPositions))
-        {
-            occupiedPositions = new List<Vector2>();
-            occupiedCells[cell] = occupiedPositions;
-        }
-
-        occupiedPositions.Add(position);
-    }
-
-    private static Vector2I GetSpacingCell(Vector2 position, float cellSize)
-    {
-        return new Vector2I(
-            Mathf.FloorToInt(position.X / cellSize),
-            Mathf.FloorToInt(position.Y / cellSize));
-    }
-
-    private static bool HasMinimumSpacing(
-        IReadOnlyList<Vector3> destinations,
-        float minimumSpacing)
-    {
-        float effectiveMinimumSpacing = Mathf.Max(
-            minimumSpacing - DestinationSpacingTolerance,
-            0.0f);
-        float minimumSpacingSquared = effectiveMinimumSpacing * effectiveMinimumSpacing;
-        for (int firstIndex = 0; firstIndex < destinations.Count; firstIndex++)
-        {
-            Vector2 first = new(
-                destinations[firstIndex].X,
-                destinations[firstIndex].Z);
-            for (int secondIndex = firstIndex + 1;
-                 secondIndex < destinations.Count;
-                 secondIndex++)
-            {
-                Vector2 second = new(
-                    destinations[secondIndex].X,
-                    destinations[secondIndex].Z);
-                if (first.DistanceSquaredTo(second) < minimumSpacingSquared)
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private static Vector2 CalculateHorizontalCentroid(
-        IReadOnlyList<Vector2> positions)
-    {
-        Vector2 centroid = Vector2.Zero;
-        foreach (Vector2 position in positions)
-        {
-            centroid += position;
-        }
-
-        return centroid / positions.Count;
-    }
-
-    private static Vector2 CalculateHorizontalCentroid(
-        IReadOnlyList<Vector3> positions)
-    {
-        Vector2 centroid = Vector2.Zero;
-        foreach (Vector3 position in positions)
-        {
-            centroid += new Vector2(position.X, position.Z);
-        }
-
-        return centroid / positions.Count;
     }
 
     private bool TryGetTargetScreenBounds(ICombatTarget target, out Rect2 bounds)
